@@ -9,8 +9,8 @@ library(scales)
 #. Identify suspected infection -----------------------------------------------
 #> Data import and clean ---------------
 load("../output/data_raw.RData")
-changed_grid <- read_csv("../output/changed_grid_dob.csv")
-cam_visits <- read_csv("../output/cam_stay_20190917.csv") 
+changed_grid <- read_csv("../output/changed_grid_dob_20190924.csv")
+cam_visits <- read_csv("../output/cam_stay_20190925.csv") 
 blood_raw <- read_excel("../../Mito Delirium BioVU Data/Phenotype data/culture_merge.xlsx",
                         sheet = "Blood Culture Days")
 names(blood_raw) <- str_to_lower(names(blood_raw))
@@ -49,16 +49,16 @@ sum(unique(blood_raw$grid) %in% unique(changed_grid$updated_grid))
 abx_raw1 <- abx_raw %>% 
   left_join(changed_grid, by = c("grid" = "old_grid")) %>% 
   mutate(
-    drug_date = case_when(
-      dob != dummy_dob ~ mdy(drug_date) - dob + dummy_dob,
-      T ~ mdy(drug_date)),
+    drug_date = if_else(!is.na(updated_grid),
+                        mdy(drug_date) - old_dob + updated_dob,
+                        mdy(drug_date)),
     grid = if_else(!is.na(updated_grid), updated_grid, grid)
   ) %>% 
   distinct(grid, drug_date, drug_name, drug_route1, drug_route2, drug_route3) %>% 
   arrange(grid, drug_date) # some duplicates
 sum(abx_raw1$grid %in% changed_grid$old_grid)
 changed_grid %>% 
-  filter(dob != dummy_dob, old_grid %in% abx_raw$grid) 
+  filter(updated_grid == "R200032573") 
 abx_raw1 %>% filter(grid == "R200032573") %>% 
   select(grid, drug_date, drug_name) %>% 
   print(n = 40)
@@ -71,16 +71,16 @@ abx_raw %>%
 blood_raw1 <- blood_raw %>% 
   left_join(changed_grid, by = c("grid" = "old_grid")) %>% 
   mutate(
-    blood_date = case_when(
-      dob != dummy_dob ~ as_date(`blood culture code_date`) - dob + dummy_dob,
-      T~ as_date(`blood culture code_date`)),
+    blood_date = if_else(!is.na(updated_grid),
+                         as_date(`blood culture code_date`) - old_dob + updated_dob,
+                         as_date(`blood culture code_date`)),
     grid = if_else(!is.na(updated_grid), updated_grid, grid)
   ) %>% 
   distinct(grid, blood_date) %>% 
   arrange(grid, blood_date) # some duplicates
 sum(blood_raw1$grid %in% changed_grid$old_grid)
 changed_grid %>% 
-  filter(dob != dummy_dob, old_grid %in% blood_raw$grid) 
+  filter(updated_grid == "R200032573") 
 blood_raw1 %>% filter(grid == "R200032573") %>% 
   select(grid, blood_date) %>% 
   print(n = 40)
@@ -179,10 +179,10 @@ names(bilirubin_raw) <- tolower(names(bilirubin_raw))
 ##>> convert messed-up GRIDs and dates -------------
 length(unique(bilirubin_raw$grid))
 sum(unique(bilirubin_raw$grid) %in% unique(static_raw$grid))  # check whether any new updated GRID
-sum(unique(bilirubin_raw$grid) %in% unique(changed_grid$old_grid))
+sum(unique(bilirubin_raw$grid) %in% unique(changed_grid$old_grid)) # no OLD GRID
 sum(unique(bilirubin_raw$grid) %in% unique(changed_grid$updated_grid))
-#!!! Now we have NEW updated GRID, will need their DOB to make sure dates are correct
-# no need to convert, but will correct later.
+bilirubin_raw %>% 
+  filter(!grid %in% static_raw$grid, !grid %in% changed_grid$updated_grid)
 bilirubin_raw %>% 
   distinct(grid, lab_date)
 ggplot(bilirubin_raw) +
@@ -256,10 +256,10 @@ names(platelet_raw) <- tolower(names(platelet_raw))
 ##>> convert messed-up GRIDs and dates -------------
 length(unique(platelet_raw$grid))
 sum(unique(platelet_raw$grid) %in% unique(static_raw$grid))  # check whether any new updated GRID
-sum(unique(platelet_raw$grid) %in% unique(changed_grid$old_grid))
+sum(unique(platelet_raw$grid) %in% unique(changed_grid$old_grid)) # No OLD GRIDS
 sum(unique(platelet_raw$grid) %in% unique(changed_grid$updated_grid))
-#!!! Now we have NEW updated GRID, will need their DOB to make sure dates are correct
-# no need to convert, but will correct later.
+platelet_raw %>% 
+  filter(!grid %in% static_raw$grid, !grid %in% changed_grid$updated_grid)
 platelet_raw %>% 
   distinct(grid, lab_date)
 ggplot(platelet_raw) +
@@ -293,15 +293,16 @@ platelet_infection %>%
 
 #> central nervous system: RASS -----------------------------------
 #>> convert messed-up GRIDs and dates -------------
+length(unique(rass_raw$grid))
 sum(unique(rass_raw$grid) %in% unique(changed_grid$old_grid))
-sum(unique(rass_raw1$grid) %in% unique(changed_grid$updated_grid))
+sum(unique(rass_raw$grid) %in% unique(changed_grid$updated_grid))
 rass_raw1 <- rass_raw %>% 
   left_join(changed_grid, by = c("grid" = "old_grid")) %>% 
   rename(rass_time = rass_date) %>% 
   mutate(
-    dttm = case_when(
-      dob != dummy_dob ~ mdy_hms(rass_time) - as_datetime(dob) + as_datetime(dummy_dob),
-      T ~ mdy_hms(rass_time)),
+    dttm = if_else(!is.na(updated_grid),
+                   mdy_hms(rass_time) - as_datetime(old_dob) + as_datetime(updated_dob),
+                   mdy_hms(rass_time)),
     rass_date = as_date(dttm),
     grid = if_else(!is.na(updated_grid), updated_grid, grid)
   ) %>% 
@@ -357,16 +358,16 @@ sum(unique(pressor_raw$grid) %in% unique(changed_grid$updated_grid))
 pressor_raw1 <- pressor_raw %>% 
   left_join(changed_grid, by = c("grid" = "old_grid")) %>% 
   mutate(
-    drug_date = case_when(
-      dob != dummy_dob ~ mdy(drug_date) - dob + dummy_dob,
-      T ~ mdy(drug_date)),
+    drug_date = if_else(!is.na(updated_grid),
+                        mdy(drug_date) - old_dob + updated_dob,
+                        mdy(drug_date)),
     grid = if_else(!is.na(updated_grid), updated_grid, grid)
   ) %>% 
   distinct(grid, drug_date, drug_name, drug_route1, drug_route2, drug_route3) %>% 
   arrange(grid, drug_date) # one duplicate
 sum(pressor_raw1$grid %in% changed_grid$old_grid)
 changed_grid %>% 
-  filter(dob != dummy_dob, old_grid %in% pressor_raw$grid) 
+  filter(updated_grid == "R200032573") 
 pressor_raw1 %>% filter(grid == "R200032573") %>% 
   select(grid, drug_date, drug_name) %>% 
   print(n = 40)
@@ -392,8 +393,153 @@ pressor_infection <-  sqldf::sqldf('SELECT *
   summarise(sofa_cardio = max(sofa_cardio))  %>% 
   ungroup()  
 
+#> Renal: Creatinine ----------------------------
+file_names <- list.files("../../Mito Delirium BioVU Data/Lab values/Creatinine",
+                         full.names = T)
 
-#> merge SOFA scores together ---------------
+#>> out of range value ------------------------
+creatinine_oor <- NULL
+for (file in file_names) {
+  creatinine_oor <- creatinine_oor %>% 
+    bind_rows(read_excel(file, sheet = 2))
+}
+Hmisc::describe(creatinine_oor) #650 rows
+creatinine_oor %>% 
+  distinct(`Creat mg/dL`) %>% 
+  pull(`Creat mg/dL`) %>% 
+  str_view_all( "[[:digit:]]*\\.*[[:digit:]]+")
+creatinine_raw <- creatinine_oor %>% 
+  rename(oor_value = `Creat mg/dL`) %>% 
+  mutate(`Creat mg/dL` = case_when(
+    str_detect(oor_value, ",") ~ as.numeric(str_replace(oor_value, ",", ".")),
+    str_detect(oor_value, "-") ~ str_extract_all(oor_value, "[[:digit:]]*\\.*[[:digit:]]+") %>% sapply(function(x) mean(as.numeric(x))),
+    T ~ as.numeric(str_extract(oor_value, "[[:digit:]]*\\.*[[:digit:]]+"))
+  )) 
+creatinine_raw %>% 
+  distinct(oor_value, `Creat mg/dL`)
+##>> normal value ---------------------
+for (file in file_names) {
+  creatinine_raw <- creatinine_raw %>% 
+    bind_rows(read_excel(file, sheet = 1))
+}
+Hmisc::describe(creatinine_raw)
+names(creatinine_raw) <- tolower(names(creatinine_raw))
+
+##>> convert messed-up GRIDs and dates -------------
+length(unique(creatinine_raw$grid))
+sum(unique(creatinine_raw$grid) %in% unique(static_raw$grid))  # check whether any new updated GRID
+sum(unique(creatinine_raw$grid) %in% unique(changed_grid$old_grid)) # no OLD GRID
+sum(unique(creatinine_raw$grid) %in% unique(changed_grid$updated_grid))
+creatinine_raw %>% 
+  filter(!grid %in% static_raw$grid, !grid %in% changed_grid$updated_grid)
+creatinine_raw %>% 
+  distinct(grid, lab_date)
+ggplot(creatinine_raw) +
+  geom_histogram(aes(x = `creat mg/dl`))
+
+#>> take worst/maximum creatinine for each day and infection --------------
+#' For indentify sepsis purpose, not necessary to get daily status
+creatinine_daily <- creatinine_raw %>% 
+  filter(!is.na(`creat mg/dl`)) %>% 
+  mutate(lab_date = as_date(lab_date)) %>% 
+  group_by(grid, lab_date) %>% 
+  summarise(creatinine = max(`creat mg/dl`)) %>% 
+  ungroup()
+creatinine_infection <-  sqldf::sqldf('SELECT * 
+                                     FROM infections_w1d as t1
+                                     INNER JOIN creatinine_daily as t2 
+                                     ON t1.grid = t2.grid AND lab_date BETWEEN onset_date-2 AND onset_date+1') %>% 
+  as_tibble() %>% 
+  select(-grid..7) %>% 
+  group_by(grid, adm_id) %>% 
+  summarise(creatinine = max(creatinine)) %>% 
+  ungroup() %>% 
+  mutate(
+    sofa_renal = case_when(
+      creatinine < 1.2 ~ 0,
+      creatinine < 2.0 ~ 1,
+      creatinine < 3.5 ~ 2,
+      creatinine <= 5.0 ~ 3,
+      creatinine > 5.0 ~ 4
+    )
+  )
+creatinine_infection %>% 
+  Hmisc::describe()
+
+#> Respiration ---------------------------------------------
+#>> ventilationd data ----------------
+# but it's initiation?
+vent_raw <- read_excel("../../Mito Delirium BioVU Data/Phenotype data/ventilation_days.xlsx")
+names(vent_raw) <- str_to_lower((names(vent_raw)))
+vent_raw %>% Hmisc::describe()
+sum(unique(vent_raw$grid) %in% static_raw$grid)
+sum(unique(vent_raw$grid) %in% changed_grid$old_grid)
+sum(unique(vent_raw$grid) %in% changed_grid$updated_grid)
+vent_raw1 <- vent_raw %>% 
+  left_join(changed_grid, by = c("grid" = "old_grid")) %>% 
+  mutate(
+    code_date = if_else(!is.na(updated_grid),
+                   as_date(code_date) - old_dob + updated_dob,
+                   as_date(code_date)),
+    grid = if_else(!is.na(updated_grid), updated_grid, grid)
+  ) %>% 
+  distinct(grid, code_date) %>% 
+  mutate(vent = 1) %>% 
+  arrange(grid, code_date)
+sum(vent_raw1$grid %in% changed_grid$old_grid)
+
+#>> Ratio data ---------------
+file_names <- list.files("../../Mito Delirium BioVU Data/Lab values/PO2_FI02_ratio",
+                         pattern = ".xlsx$",
+                         full.names = T)
+ratio_raw <- NULL
+for (file in file_names) {
+  ratio_raw <- ratio_raw %>% 
+    bind_rows(read_excel(file))
+}
+names(ratio_raw) <- str_to_lower(names(ratio_raw))
+Hmisc::describe(ratio_raw)
+sum(unique(ratio_raw$grid) %in% static_raw$grid)
+sum(unique(ratio_raw$grid) %in% changed_grid$old_grid)
+sum(unique(ratio_raw$grid) %in% changed_grid$updated_grid)
+ratio_raw %>% 
+  filter(!grid %in% static_raw$grid, !grid %in% changed_grid$updated_grid)
+
+#>> take worst/minimum ratio for each day and infection --------------
+ratio_daily <- ratio_raw %>% 
+  filter(!is.na(`po2/fi (mmhg)`)) %>% 
+  mutate(lab_date = as_date(lab_date)) %>% 
+  group_by(grid, lab_date) %>% 
+  summarise(ratio = min(`po2/fi (mmhg)`)) %>% 
+  ungroup()
+ratio_vent_daily <- ratio_daily %>% 
+  full_join(vent_raw1, by = c("grid", "lab_date" = "code_date")) %>% 
+  mutate(sofa_respiration = case_when(
+    ratio < 100 & vent == 1 ~ 4,
+    ratio < 200 & vent == 1 ~ 3,
+    ratio < 300 ~ 2, # including ratio < 200 and < 100 but no vent
+    ratio < 400 ~ 1,
+    ratio >= 400 ~ 0
+  ))
+  
+resp_infection <-  sqldf::sqldf('SELECT * 
+                                     FROM infections_w1d as t1
+                                     INNER JOIN ratio_vent_daily as t2 
+                                     ON t1.grid = t2.grid AND lab_date BETWEEN onset_date-2 AND onset_date+1') %>% 
+  as_tibble() %>% 
+  select(-grid..7) %>% 
+  group_by(grid, adm_id) %>% 
+  filter(!is.na(sofa_respiration)) %>% 
+  summarise(sofa_respiration = max(sofa_respiration, na.rm = T)) %>% 
+  ungroup() # 3818 encounters had ventaltion but no ratio data.
+resp_infection %>% 
+  Hmisc::describe()
+
+
+
+
+
+#> merge SOFA scores together ----------------------------------------------------
 sepsis <- infections_w1d %>% 
   left_join(
     bilirubin_infection,
@@ -411,6 +557,14 @@ sepsis <- infections_w1d %>%
     pressor_infection,
     by = c("grid", "adm_id")
   ) %>% 
+  left_join(
+    creatinine_infection,
+    by = c("grid", "adm_id")
+  ) %>%
+  left_join(
+    resp_infection,
+    by = c("grid", "adm_id")
+  ) 
   mutate(sofa = case_when(
     is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) != 4 ~
     coalesce(sofa_liver, 0) + coalesce(sofa_coagulation, 0) + 

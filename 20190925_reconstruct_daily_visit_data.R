@@ -372,7 +372,7 @@ cam_visits %>%
   Hmisc::describe()
 cam_visits %>% 
   count(all_norm)
-write_csv(cam_visits, "../output/cam_stay_2019025.csv")
+write_csv(cam_visits, "../output/cam_stay_20190925.csv")
 
 #> visit summary: status ----------------
 coma_q <- cam_visits %>% 
