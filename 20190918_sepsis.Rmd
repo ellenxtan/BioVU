@@ -1,0 +1,431 @@
+---
+title: "Identify Sepsis"
+author: "Fei Ding"
+date: "September 18, 2019"
+output:
+  html_document:
+    df_print: paged
+---
+```{r setup, include = FALSE}
+library(tidyverse)
+library(readxl)
+library(magrittr)
+library(lubridate)
+library(scales)
+library(kableExtra)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+
+load("../output/data_raw.RData")
+
+
+#. Identify suspected infection -----------------------------------------------
+#> Data import and clean ---------------
+load("../output/data_raw.RData")
+changed_grid <- read_csv("../output/changed_grid_dob.csv")
+cam_visits <- read_csv("../output/cam_stay_20190917.csv") 
+blood_raw <- read_excel("../../Mito Delirium BioVU Data/Phenotype data/culture_merge.xlsx",
+                        sheet = "Blood Culture Days")
+names(blood_raw) <- str_to_lower(names(blood_raw))
+names(changed_grid) <- str_to_lower(names(changed_grid))
+
+
+med_raw <- NULL
+for (i in 1:3) {
+  med_raw %<>% 
+    bind_rows(
+      read_csv(
+        paste0("../../Mito Delirium BioVU Data/Data/grid_date_med", i, ".csv"),
+        col_names = c("grid", "drug_date", "drug_name", "drug_class", 
+                      "drug_route1", "drug_route2", "drug_route3"),
+        skip = 1
+      ) 
+    ) 
+}
+abx_raw <- med_raw %>% 
+  filter(drug_class == "antibiotic") %>% 
+  select(-drug_class) 
+#> convert messed-up GRIDs and dates -------------------
+abx_raw1 <- abx_raw %>% 
+  left_join(changed_grid, by = c("grid" = "old_grid")) %>% 
+  mutate(
+    drug_date = case_when(
+      dob != dummy_dob ~ mdy(drug_date) - dob + dummy_dob,
+      T ~ mdy(drug_date)),
+    grid = if_else(!is.na(updated_grid), updated_grid, grid)
+  ) %>% 
+  distinct(grid, drug_date, drug_name, drug_route1, drug_route2, drug_route3) %>% 
+  arrange(grid, drug_date) # some duplicates
+
+blood_raw1 <- blood_raw %>% 
+  left_join(changed_grid, by = c("grid" = "old_grid")) %>% 
+  mutate(
+    blood_date = case_when(
+      dob != dummy_dob ~ as_date(`blood culture code_date`) - dob + dummy_dob,
+      T~ as_date(`blood culture code_date`)),
+    grid = if_else(!is.na(updated_grid), updated_grid, grid)
+  ) %>% 
+  distinct(grid, blood_date) %>% 
+  arrange(grid, blood_date) # some duplicates
+#> assign adm_id to each abx/blood draw -----------------------------
+abx_raw2 <- sqldf::sqldf('SELECT * 
+                         FROM cam_visits as t1
+                         INNER JOIN abx_raw1 as t2 
+                         ON t1.grid = t2.grid AND drug_date BETWEEN adm_date-1 AND dc_date') %>% 
+  as_tibble() %>% 
+  select(grid, adm_id, adm_date, dc_date, drug_date:drug_route3) %>% 
+  mutate(day = as.numeric(drug_date - adm_date) + 1) %>% 
+  select(grid, adm_id, adm_date, dc_date, drug_date, day, drug_name:drug_route3) 
+abx_distinct <- abx_raw2 %>% 
+  distinct(grid, adm_id, adm_date, dc_date, drug_date, day)
+blood_raw2 <- sqldf::sqldf('SELECT * 
+                           FROM cam_visits as t1
+                           INNER JOIN blood_raw1 as t2
+                           ON t1.grid = t2.grid AND blood_date BETWEEN adm_date-1 AND dc_date') %>% 
+  as_tibble() %>% 
+  select(grid, adm_id, adm_date, dc_date, blood_date) %>% 
+  mutate(day = as.numeric(blood_date - adm_date) + 1) %>% 
+  select(grid, adm_id, adm_date, dc_date, blood_date, day) 
+
+#> go through abx and blood culture data to find qualifying admission ----------
+infections <- sqldf::sqldf('SELECT t1.grid, t1.adm_id, t1.adm_date, t1.dc_date, blood_date, drug_date
+                           FROM abx_distinct as t1
+                           INNER JOIN blood_raw2 as t2
+                           ON t1.grid = t2.grid AND t1.adm_id = t2.adm_id AND blood_date BETWEEN drug_date-3 AND drug_date + 1') %>% 
+  as_tibble() %>% 
+  mutate(onset_date = pmin(blood_date, drug_date),
+         onset_day = as.numeric(onset_date - adm_date + 1)) %>% 
+  group_by(grid, adm_id, adm_date, dc_date) %>% 
+  summarise(onset_date = min(onset_date), onset_day = min(onset_day)) %>% 
+  ungroup()
+## we decided to limit onset date 1 day within hospital admission date
+infections_w1d <- infections %>% 
+  filter(onset_day %in% 0:2)
+infections_w1d %>% 
+  count(onset_day)
+```
+
+
+# Suspected Infection
+Suspected infection was defined as combination of antibiotics and body fluid cultures:
+
+* If the antibiotic was given first, the culture sampling must have been obtained within 1 day.
+* If the culture sampling was first, the antibiotic must have been ordered dwithin 3 days.
+* The onset date of infection was the date on which the first of these two events occured.
+* We added an addtional requirement that the onset date must be $\pm1$ day within hospital admission date.
+
+*Note that we only have blood culture dates now, the definition is any body fluid cultures (blood, unrine, cerebrospinal fluid, etc)*
+
+Out of `r comma(nrow(cam_visits))` ICU encounters with CAM-ICU assessments, `r paste0(comma(nrow(infections_w1d)), " (", percent(nrow(infections_w1d)/nrow(cam_visits)), ")")` had suspected infections within $\pm1$ day of hospital admission date.
+
+Distribution of onset day
+```{r}
+infections_w1d %>% 
+  count(onset_day) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+```
+
+# SOFA score
+We have data or partial data for   
+
+* Coagulation SOFA score (platelets)
+* Liver SOFA score (bilirubin)
+* Central nervous system SOFA score (RASS score) 
+* cardiovascular SOFA score (pressors)  
+
+SOFA score was calculated from the time window from 2 days before to 1 day after the onset of infection.  Total SOFA score was calculated using available SOFA scores for any of the four systems.  Thus, our SOFA score is an underestimate of the actual SOFA score.
+
+Central nervous system SOFA score calculated based on RASS Method C in the Modified SOFA score paper.  
+
+Rass score | SOFA score
+-----------|-----------
+$\ge$ 0 | 0  
+-1 | 1
+-2 | 2
+-3 | 3
+-4 to -5 | 4
+
+
+
+Cardiovascular SOFA score calculated based on pressor use.
+
+Pressor Use | SOFA score
+-----------|-----------
+Any epinepherine or norepinephrine | 3
+Any dopamine or dobutamine | 2 
+
+*Note the SOFA table requires the catecholamine doses are given for at least 1 hour*
+
+## Non-numerical Lab values  
+Out of range values for bilirubin were converted as following.  
+```{r}
+#. calculate SOFA score -------------------------------------------------------
+#> liver-blirubin ---------------------------
+file_names <- list.files("../../Mito Delirium BioVU Data/Lab values/Bilirubin",
+                         full.names = T)
+
+#>> out of range value ------------------------
+bilirubin_oor <- NULL
+for (file in file_names) {
+  bilirubin_oor <- bilirubin_oor %>% 
+    bind_rows(read_excel(file, sheet = "out of range"))
+}
+bilirubin_raw <- bilirubin_oor %>% 
+  rename(oor_value = `Tbil (mg/dL)`) %>% 
+  mutate(`Tbil (mg/dL)` = if_else(
+    str_detect(oor_value, "-"),
+    str_extract_all(oor_value, "[[:digit:]]*\\.*[[:digit:]]+") %>% sapply(function(x) mean(as.numeric(x))),
+    as.numeric(str_extract(oor_value, "[[:digit:]]*\\.*[[:digit:]]+"))
+  )) 
+bilirubin_raw %>% 
+  distinct(oor_value, `Tbil (mg/dL)`) %>% 
+  kable(caption = "Out of range bilirubin") %>% 
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+##>> normal value ---------------------
+for (file in file_names) {
+  bilirubin_raw <- bilirubin_raw %>% 
+    bind_rows(read_excel(file, sheet = 1))
+}
+names(bilirubin_raw) <- tolower(names(bilirubin_raw))
+#>> take worst/maximum bilirubin for each day and infection --------------
+#' For indentify sepsis purpose, not necessary to get daily status
+bilirubin_daily <- bilirubin_raw %>% 
+  filter(!is.na(`tbil (mg/dl)`)) %>% 
+  mutate(lab_date = as_date(lab_date)) %>% 
+  group_by(grid, lab_date) %>% 
+  summarise(bilirubin = max(`tbil (mg/dl)`)) %>% 
+  ungroup()
+bilirubin_infection <-  sqldf::sqldf('SELECT * 
+                                     FROM infections_w1d as t1
+                                     INNER JOIN bilirubin_daily as t2 
+                                     ON t1.grid = t2.grid AND lab_date BETWEEN onset_date-2 AND onset_date+1') %>% 
+  as_tibble() %>% 
+  select(-grid..7) %>% 
+  group_by(grid, adm_id) %>% 
+  summarise(bilirubin = max(bilirubin)) %>% 
+  ungroup() %>% 
+  mutate(
+    sofa_liver = case_when(
+      bilirubin < 1.2 ~ 0,
+      bilirubin < 2.0 ~ 1,
+      bilirubin < 6.0 ~ 2,
+      bilirubin <= 12.0 ~ 3,
+      bilirubin > 12.0 ~ 4
+    )
+  )
+```
+
+Out of range values for platelets were converted as following. 
+```{r}
+#> coagulation: platelets --------------------------------------------------
+#>> out of range value ------------------------
+file_names <- list.files("../../Mito Delirium BioVU Data/Lab values/Platelet",
+                         pattern = "range.xlsx$",
+                         full.names = T)
+platelet_oor <- NULL
+for (file in file_names) {
+  platelet_oor <- platelet_oor %>% 
+    bind_rows(read_excel(file))
+}
+platelet_raw <- platelet_oor %>% 
+  rename(oor_value = `Plt-Ct (thou/uL)`) %>% 
+  mutate(`Plt-Ct (thou/uL)` = if_else(
+    str_detect(oor_value, "-"),
+    str_extract_all(oor_value, "[[:digit:]]+") %>% sapply(function(x) mean(as.numeric(x))),
+    as.numeric(str_extract(oor_value, "[[:digit:]]+"))
+  )) 
+platelet_raw %>% 
+  distinct(oor_value, `Plt-Ct (thou/uL)`) %>% 
+  kable(caption = "Out of range platelets") %>% 
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+#>> normal value -------------------------------
+file_names <- list.files("../../Mito Delirium BioVU Data/Lab values/Platelet",
+                         pattern = "labs.xlsx$",
+                         full.names = T)
+for (file in file_names) {
+  platelet_raw <- platelet_raw %>% 
+    bind_rows(read_excel(file))
+}
+names(platelet_raw) <- tolower(names(platelet_raw))
+## take worst/maximum platelet for each day and infection
+platelet_daily <- platelet_raw %>% 
+  mutate(lab_date = as_date(lab_date)) %>% 
+  group_by(grid, lab_date) %>% 
+  summarise(platelet = min(`plt-ct (thou/ul)`)) %>% 
+  ungroup()
+platelet_infection <-  sqldf::sqldf('SELECT * 
+                                    FROM infections_w1d as t1
+                                    INNER JOIN platelet_daily as t2 
+                                    ON t1.grid = t2.grid AND lab_date BETWEEN onset_date-2 AND onset_date+1') %>% 
+  as_tibble() %>% 
+  select(-grid..7) %>% 
+  group_by(grid, adm_id) %>% 
+  summarise(platelet = min(platelet)) %>% 
+  ungroup() %>% 
+  mutate(
+    sofa_coagulation = case_when(
+      platelet < 20 ~ 4,
+      platelet < 50 ~ 3,
+      platelet < 100 ~ 2,
+      platelet < 150 ~ 1,
+      platelet >= 150 ~ 0
+    )
+  )
+
+#> central nervous system: RASS -----------------------------------
+#>> convert messed-up GRIDs and dates -------------
+rass_raw1 <- rass_raw %>% 
+  left_join(changed_grid, by = c("grid" = "old_grid")) %>% 
+  rename(rass_time = rass_date) %>% 
+  mutate(
+    dttm = case_when(
+      dob != dummy_dob ~ mdy_hms(rass_time) - as_datetime(dob) + as_datetime(dummy_dob),
+      T ~ mdy_hms(rass_time)),
+    rass_date = as_date(dttm),
+    grid = if_else(!is.na(updated_grid), updated_grid, grid)
+  ) %>% 
+  distinct(grid, dttm, rass_date, rass_score, rass_score_test_name) %>% 
+  arrange(grid, dttm)
+## can ignore duplicated RASS assessed at the same time, becasue we are taking worst daily value
+rass_daily <- rass_raw1 %>% 
+  filter(rass_score %in% -5:4) %>% 
+  select(-rass_score_test_name) %>% 
+  distinct() %>% 
+  group_by(grid, rass_date) %>% 
+  summarise(rass = min(rass_score)) %>% 
+  ungroup()
+rass_infection <-  sqldf::sqldf('SELECT * 
+                                FROM infections_w1d as t1
+                                INNER JOIN rass_daily as t2 
+                                ON t1.grid = t2.grid AND rass_date BETWEEN onset_date-2 AND onset_date+1') %>% 
+  as_tibble() %>% 
+  select(-grid..7) %>% 
+  group_by(grid, adm_id) %>% 
+  summarise(rass = min(rass)) %>% 
+  ungroup() %>% 
+  mutate(
+    ## use RASS method C in the paper b/c it had the best predictive validity based it's associaiton with mortality
+    sofa_cns = case_when(
+      rass >= 0 ~ 0,
+      rass == -1 ~ 1,
+      rass == -2 ~ 2,
+      rass == -3 ~ 3,
+      rass %in% -4:-5 ~ 4
+    )
+  )
+
+#> Cardiovascular: pressor --------------------
+pressor_raw <- med_raw %>% 
+  filter(drug_class == "pressor") %>% 
+  select(-drug_class) 
+pressor_raw1 <- pressor_raw %>% 
+  left_join(changed_grid, by = c("grid" = "old_grid")) %>% 
+  mutate(
+    drug_date = case_when(
+      dob != dummy_dob ~ mdy(drug_date) - dob + dummy_dob,
+      T ~ mdy(drug_date)),
+    grid = if_else(!is.na(updated_grid), updated_grid, grid)
+  ) %>% 
+  distinct(grid, drug_date, drug_name, drug_route1, drug_route2, drug_route3) %>% 
+  arrange(grid, drug_date) # one duplicate
+## take worst SOFA for each infection
+pressor_infection <-  sqldf::sqldf('SELECT * 
+                                    FROM infections_w1d as t1
+                                    INNER JOIN pressor_raw1 as t2 
+                                    ON t1.grid = t2.grid AND drug_date BETWEEN onset_date-2 AND onset_date+1') %>% 
+  as_tibble() %>% 
+  select(grid, adm_id, drug_name) %>%
+  mutate(sofa_cardio = case_when(
+    drug_name %in% c("DOBUTAMINE", "DOPAMINE") ~ 2,
+    drug_name %in% c("EPINEPHRINE", "NOREPINEPHRINE") ~ 3)
+    ) %>% 
+  group_by(grid, adm_id) %>% 
+  summarise(sofa_cardio = max(sofa_cardio))  %>% 
+  ungroup()  
+
+
+#> merge SOFA scores together ---------------
+sepsis <- infections_w1d %>% 
+  left_join(
+    bilirubin_infection,
+    by = c("grid", "adm_id")
+  ) %>% 
+  left_join(
+    platelet_infection,
+    by = c("grid", "adm_id")
+  ) %>% 
+  left_join(
+    rass_infection,
+    by = c("grid", "adm_id")
+  ) %>% 
+  left_join(
+    pressor_infection,
+    by = c("grid", "adm_id")
+  ) %>% 
+ mutate(sofa = case_when(
+    is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) != 4 ~
+    coalesce(sofa_liver, 0) + coalesce(sofa_coagulation, 0) + 
+           coalesce(sofa_cns, 0) + coalesce(sofa_cardio, 0)),
+    data_type = case_when(
+      is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) == 4 ~ "All missing",
+      is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) > 1 ~ "Missing > 1 system",
+      is.na(sofa_liver) ~ "No Liver SOFA",
+      is.na(sofa_coagulation) ~ "No Coagulation SOFA",
+      is.na(sofa_cns) ~ "No CNS SOFA",
+      is.na(sofa_cardio) ~ "No Cardio SOFA",
+      is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) == 0 ~ "Complete data"
+    )
+  )
+write_csv(sepsis, "../output/sepsis_stay_20190919.csv")
+```
+
+
+## Distribution of SOFA score
+```{r}
+summary(sepsis$sofa) 
+ggplot(sepsis) +
+  geom_histogram(aes(x = sofa), binwidth = 1) +
+  labs(title = "Distribution of SOFA score") 
+```
+
+## Missing Data
+
+Cardio and Liver system had the most missing data.
+```{r}
+sepsis %>% 
+  select(sofa_coagulation, sofa_liver, sofa_cardio, sofa_cns) %>% 
+  sapply(function(x) percent(sum(is.na(x))/length(x))) %>% 
+  kable(caption = "Percent of missing data for each system", col.names = "% missing", full_width = F) %>% 
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+sepsis %>% 
+  count(data_type) %>% 
+  mutate(pct = percent(n/nrow(sepsis), accuracy = 0.01)) %>% 
+  kable(caption = "Data composition of all suspected infections") %>% 
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+```
+
+Although there is a lot missing, Out of the `r comma(nrow(sepsis))` suspected infections,`r paste0(comma(sum(sepsis$sofa > 2, na.rm = T)), " (", percent(sum(sepsis$sofa > 2, na.rm = T)/nrow(sepsis)), ")")` of SOFA scores are already > 2 calculated using available data, that is `r percent(sum(sepsis$sofa > 2, na.rm = T)/nrow(cam_visits))` of ICU encounters had sepsis. 
+
+```{r}
+sepsis %>% 
+  filter(sofa < 2) %>% 
+  count(data_type) %>% 
+  mutate(pct = percent(n/sum(sepsis$sofa < 2, na.rm = T), accuracy = 0.1)) %>% 
+  kable(caption = "Data composition for SOFA < 2") %>% 
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+```
+
+
+
+## What I need
+* I will need DOB of all updated_GRIDs in changed_GRIDs file to correctly convert dates in lab data.
+* When do we do SOFA score change, when do we use absolute value?
+
+
+
+
