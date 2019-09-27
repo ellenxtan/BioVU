@@ -142,6 +142,7 @@ infections_w1d %>%
 nrow(infections)/nrow(cam_visits)
 nrow(infections_w1d)/nrow(cam_visits)
 
+write_csv(infections, "../output/sepsis3_all_infections_20190927.csv")
 
 #. calculate SOFA score -------------------------------------------------------
 #> liver-blirubin ---------------------------
@@ -489,15 +490,7 @@ vent_raw1 <- vent_raw %>%
 sum(vent_raw1$grid %in% changed_grid$old_grid)
 
 #>> Ratio data ---------------
-file_names <- list.files("../../Mito Delirium BioVU Data/Lab values/PO2_FI02_ratio",
-                         pattern = ".xlsx$",
-                         full.names = T)
-ratio_raw <- NULL
-for (file in file_names) {
-  ratio_raw <- ratio_raw %>% 
-    bind_rows(read_excel(file))
-}
-names(ratio_raw) <- str_to_lower(names(ratio_raw))
+ratio_raw <- read_csv("../output/pao2_fio2_ratio_calc_20190927.csv")
 Hmisc::describe(ratio_raw)
 sum(unique(ratio_raw$grid) %in% static_raw$grid)
 sum(unique(ratio_raw$grid) %in% changed_grid$old_grid)
@@ -507,10 +500,9 @@ ratio_raw %>%
 
 #>> take worst/minimum ratio for each day and infection --------------
 ratio_daily <- ratio_raw %>% 
-  filter(!is.na(`po2/fi (mmhg)`)) %>% 
-  mutate(lab_date = as_date(lab_date)) %>% 
+  filter(!is.na(ratio_c)) %>% 
   group_by(grid, lab_date) %>% 
-  summarise(ratio = min(`po2/fi (mmhg)`)) %>% 
+  summarise(ratio = min(ratio_c)) %>% 
   ungroup()
 ratio_vent_daily <- ratio_daily %>% 
   full_join(vent_raw1, by = c("grid", "lab_date" = "code_date")) %>% 
@@ -529,9 +521,10 @@ resp_infection <-  sqldf::sqldf('SELECT *
   as_tibble() %>% 
   select(-grid..7) %>% 
   group_by(grid, adm_id) %>% 
-  filter(!is.na(sofa_respiration)) %>% 
+ filter(is.na(sofa_respiration)) %>% 
   summarise(sofa_respiration = max(sofa_respiration, na.rm = T)) %>% 
-  ungroup() # 3818 encounters had ventaltion but no ratio data.
+  ungroup() # %>%  # 3818 encounters had ventaltion but no ratio data.
+#  count(sofa_respiration) 
 resp_infection %>% 
   Hmisc::describe()
 
@@ -564,39 +557,40 @@ sepsis <- infections_w1d %>%
   left_join(
     resp_infection,
     by = c("grid", "adm_id")
-  ) 
+  ) %>% 
   mutate(sofa = case_when(
-    is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) != 4 ~
-    coalesce(sofa_liver, 0) + coalesce(sofa_coagulation, 0) + 
-           coalesce(sofa_cns, 0) + coalesce(sofa_cardio, 0)),
+    is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + 
+      is.na(sofa_cardio) + is.na(sofa_cardio) != 5 ~
+      coalesce(sofa_liver, 0) + coalesce(sofa_coagulation, 0) + 
+      coalesce(sofa_cns, 0) + coalesce(sofa_cardio, 0) + 
+      coalesce(sofa_respiration, 0)),
     data_type = case_when(
-      is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) == 4 ~ "All missing",
-      is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) > 1 ~ "Missing > 1 system",
+      is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) + is.na(sofa_respiration) == 5 ~ "All missing",
+      is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) + is.na(sofa_respiration) > 1 ~ "Missing > 1 system",
       is.na(sofa_liver) ~ "No Liver SOFA",
       is.na(sofa_coagulation) ~ "No Coagulation SOFA",
       is.na(sofa_cns) ~ "No CNS SOFA",
       is.na(sofa_cardio) ~ "No Cardio SOFA",
-      is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) == 0 ~ "Complete data"
+      is.na(sofa_respiration) ~ "No Respiration SOFA",
+      is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) + is.na(sofa_respiration) == 0 ~ "Complete data"
     )
   )
 sepsis %>% 
   Hmisc::describe()
 sepsis %>% 
-  filter(is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) != 4) %>% 
+  filter(is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) + is.na(sofa_respiration) != 5) %>% 
   select(grid, adm_id, starts_with("sofa"))
 summary(sepsis$sofa)
 ggplot(sepsis) +
   geom_histogram(aes(x = sofa), binwidth = 1) +
   labs(title = "Distribution of SOFA score") 
+sepsis %>% 
+  count(sofa < 2)
 
 sepsis %>% 
-  select(sofa_coagulation, sofa_liver, sofa_cardio, sofa_cns) %>% 
+  select(sofa_coagulation, sofa_liver, sofa_cardio, sofa_cns, sofa_respiration) %>% 
   sapply(function(x) percent(sum(is.na(x))/length(x))) 
-ggplot(sepsis) +
-  geom_bar(aes(x = factor(1), fill = data_type)) +
-  coord_polar("y") +
- # scale_fill_brewer(palette="Blues") +
-  theme_minimal()
+
 sepsis %>% 
   count(data_type) %>% 
   mutate(pct = percent(n/nrow(sepsis), accuracy = 0.01))
@@ -604,3 +598,5 @@ sepsis %>%
   filter(sofa < 2) %>% 
   count(data_type) %>% 
   mutate(pct = percent(n/nrow(sepsis), accuracy = 0.01))
+
+write_csv(sepsis, "../output/sepsis3_20190927.csv")
