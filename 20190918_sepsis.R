@@ -559,22 +559,30 @@ sepsis <- infections_w1d %>%
     by = c("grid", "adm_id")
   ) %>% 
   mutate(sofa = case_when(
-    is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + 
-      is.na(sofa_cardio) + is.na(sofa_cardio) != 5 ~
+    is.na(sofa_respiration) + is.na(sofa_coagulation) + is.na(sofa_liver) + 
+      is.na(sofa_cardio) + is.na(sofa_cns) + is.na(sofa_renal) != 6 ~
       coalesce(sofa_liver, 0) + coalesce(sofa_coagulation, 0) + 
       coalesce(sofa_cns, 0) + coalesce(sofa_cardio, 0) + 
-      coalesce(sofa_respiration, 0)),
+      coalesce(sofa_respiration, 0)) + coalesce(sofa_renal, 0),
     data_type = case_when(
-      is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) + is.na(sofa_respiration) == 5 ~ "All missing",
-      is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) + is.na(sofa_respiration) > 1 ~ "Missing > 1 system",
+      is.na(sofa_respiration) + is.na(sofa_coagulation) + is.na(sofa_liver) + 
+        is.na(sofa_cardio) + is.na(sofa_cns) + is.na(sofa_renal) == 6 ~ "All missing",
+      is.na(sofa_respiration) + is.na(sofa_coagulation) + is.na(sofa_liver) + 
+        is.na(sofa_cardio) + is.na(sofa_cns) + is.na(sofa_renal) > 1 ~ "Missing > 1 system",
       is.na(sofa_liver) ~ "No Liver SOFA",
       is.na(sofa_coagulation) ~ "No Coagulation SOFA",
       is.na(sofa_cns) ~ "No CNS SOFA",
       is.na(sofa_cardio) ~ "No Cardio SOFA",
       is.na(sofa_respiration) ~ "No Respiration SOFA",
-      is.na(sofa_liver) + is.na(sofa_coagulation) + is.na(sofa_cns) + is.na(sofa_cardio) + is.na(sofa_respiration) == 0 ~ "Complete data"
+      is.na(sofa_renal) ~ "No Renal SOFA",
+      is.na(sofa_respiration) + is.na(sofa_coagulation) + is.na(sofa_liver) + 
+        is.na(sofa_cardio) + is.na(sofa_cns) + is.na(sofa_renal)  == 0 ~ "Complete data"
     )
   )
+
+
+
+
 sepsis %>% 
   Hmisc::describe()
 sepsis %>% 

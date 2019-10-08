@@ -1,0 +1,229 @@
+---
+title: "Identify Sepsis"
+author: "Fei Ding"
+date: "October 2, 2019"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include = FALSE}
+library(tidyverse)
+library(readxl)
+library(magrittr)
+library(lubridate)
+library(scales)
+library(kableExtra)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+cam_visits <- read_csv("../output/cam_stay_20190925.csv") 
+sepsis3 <- read_csv("../output/sepsis3_20190927.csv") %>% mutate(sepsis3 = 1)
+rhee_infection <- read_csv("../output/rhee_infection_20191002.csv") %>% mutate(rhee = 1)
+```
+
+# Sepsis 3
+
+We got new data (bolded below) to calculate SOFA score compared to last time.  
+  
+* **Respiration SOFA score (PaO2/FiO2 and initiation of mechanical ventilation)**
+* Coagulation SOFA score (platelets)
+* Liver SOFA score (bilirubin)
+* Central nervous system SOFA score (RASS score) 
+* Cardiovascular SOFA score (pressors)  
+* **Renal SOFA score (creatinine)**
+
+## Respiration SOFA score.
+For PaO2/FiO2, the distribution of raw ratio and FiO2 are both bimodal. FiO2 has two distinct ranges: 0-1 and 1-100 depends on whether the faction was converted to percentage.  The latter range were converted to 0-1 scale and PaO2/FiO2 ratio was recalculated using PaO2 and FiO2 assessed at exaclty the same time.  
+For PaO2 out of range values *<30* and *>800*, they were replaced with the corresponding lower/upper limit.
+
+```{r}
+
+#> Ratio data ---------------------------------------------------
+file_names <- list.files("../../Mito Delirium BioVU Data/Lab values/PO2_FI02_ratio",
+                         pattern = ".xlsx$",
+                         full.names = T)
+ratio_raw <- NULL
+for (file in file_names) {
+  ratio_raw <- ratio_raw %>% 
+    bind_rows(read_excel(file))
+}
+names(ratio_raw) <- str_to_lower(names(ratio_raw))
+ratio_raw %>% 
+  ggplot(aes(x = `po2/fi (mmhg)`)) +
+  geom_histogram() +
+  scale_x_log10() +
+  labs(title = 'Distribution of raw ratio')# two peaks
+
+#> FIO2 data ------------------------------------
+file_names <- list.files("../../Mito Delirium BioVU Data/Lab values/FIO2",
+                         pattern = ".xlsx$",
+                         full.names = T)
+fio2_raw <- NULL
+for (file in file_names) {
+  fio2_raw <- fio2_raw %>% 
+    bind_rows(read_excel(file))
+}
+names(fio2_raw) <- str_to_lower(names(fio2_raw))
+fio2_raw %<>% distinct() 
+fio2_raw %>% 
+  filter(fio2 <= 100) %>% 
+  ggplot(aes(x = fio2)) +
+  geom_histogram() +
+  scale_x_log10() +
+  labs(title = 'Distribution of FiO2')
+```
+
+**Quesion:**
+
+* Is it possible to have FiO2 below 10%? They consist about 1% of all FiO2 values, which will make the ratio really large thus low SOFA score.
+* What SOFA score should ratio < 200 but no ventilation patients get?  Now they were assigned 2.
+* What SOFA score should ventilation but no ratio data paitents get (3,818 encounters)?  Now they were assinged missing.
+* *Note that our current ventilation data is initiation of ventilation*.
+
+
+PaO2/FiO2 and Ventilation | SOFA score
+-----------|-----------
+ratio $\ge$ 400 | 0  
+300 $\le$ ratio < 400 | 1
+200 $\le$ ratio < 300 or **ratio < 200 and no ventilation** | 2
+100 $\le$ ratio < 200 and ventilation | 3
+ratio < 100 and ventilation | 4
+
+## Creatinine non-numerical lab values
+Out of range values for creatinine were converted as following.
+```{r}
+#> Renal: Creatinine ----------------------------
+file_names <- list.files("../../Mito Delirium BioVU Data/Lab values/Creatinine",
+                         full.names = T)
+
+#>> out of range value ------------------------
+creatinine_oor <- NULL
+for (file in file_names) {
+  creatinine_oor <- creatinine_oor %>% 
+    bind_rows(read_excel(file, sheet = 2))
+}
+creatinine_raw <- creatinine_oor %>% 
+  rename(oor_value = `Creat mg/dL`) %>% 
+  mutate(`Creat mg/dL` = case_when(
+    str_detect(oor_value, ",") ~ as.numeric(str_replace(oor_value, ",", ".")),
+    str_detect(oor_value, "-") ~ str_extract_all(oor_value, "[[:digit:]]*\\.*[[:digit:]]+") %>% sapply(function(x) mean(as.numeric(x))),
+    T ~ as.numeric(str_extract(oor_value, "[[:digit:]]*\\.*[[:digit:]]+"))
+  )) 
+creatinine_raw %>% 
+  distinct(oor_value, `Creat mg/dL`)
+```
+
+## Distribution of SOFA score
+```{r}
+summary(sepsis3$sofa) 
+ggplot(sepsis3) +
+  geom_histogram(aes(x = sofa), binwidth = 1) +
+  labs(title = "Distribution of SOFA score") 
+```
+
+## Missing Data
+
+Cardio and Respiration system had the most missing data.  About 20% of respiration missing data is due to missing PaO2/FiO2.  For cardio system, We only had partial data.
+```{r}
+sepsis3 %>% 
+  select(sofa_respiration, sofa_coagulation, sofa_liver, sofa_cardio, sofa_cns, sofa_renal) %>% 
+  sapply(function(x) percent(sum(is.na(x))/length(x))) %>% 
+  kable(caption = "Percent of missing data for each system", col.names = "% missing", full_width = F) %>% 
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+sepsis3 %>% 
+  count(data_type) %>% 
+  mutate(pct = percent(n/nrow(sepsis3), accuracy = 0.01)) %>% 
+  kable(caption = "Data composition of all suspected infections") %>% 
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+```
+
+Although there is a lot missing, Out of the `r comma(nrow(sepsis3))` suspected infections,`r paste0(comma(sum(sepsis3$sofa >= 2, na.rm = T)), " (", percent(sum(sepsis3$sofa >= 2, na.rm = T)/nrow(sepsis3)), ")")` of SOFA scores are already $\ge 2$ calculated using available data, that is `r percent(sum(sepsis3$sofa >= 2, na.rm = T)/nrow(cam_visits))` of `r comma(nrow(cam_visits))` ICU encounters had sepsis.
+
+
+```{r}
+sepsis3 %>% 
+  filter(sofa < 2) %>% 
+  count(data_type) %>% 
+  mutate(pct = percent(n/sum(sepsis3$sofa < 2, na.rm = T), accuracy = 0.1)) %>% 
+  kable(caption = "Data composition for SOFA < 2") %>% 
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+```
+
+# Rhee's presume infection definition
+## Algorithm
+
+* Find blood culture (BC) days within $\pm1$ day within hospital admission date
+* Identify new antibiotic (not given in the prior 2 calendar days) days in $\pm2$ day window period of BC day. Antibiotics were considered the same if drug names were the same regarldess of drug route except vancomycin, for which switching from IO/IV to PO or vise versa were considered new antibotic.
+* Examine 4 consecutive days after the new antibiotic days and keep only antibiotics initiated in current sequence.  Then Filter the antibiotics sequence using following criteria:
+    * At least 4 calendar days (including the new antibiotic day itself)
+    * At least 3 days of antibiotics admnistratoin.
+    * The gap between admnistration of antibiotics is not longer than 1 day.
+    * In the sequence, there must be at least one new IV/IM antibiotic within the $\pm2$ day window period of BC day.
+* After applying the above criteria, only those antibiotic sequence with gaps need to be double checked for QAD.
+    * If in the sequence, the day after any of the 1 day gap was new antibiotics only, i.e., not continuation of the same drug before the gap, the sequence was removed.
+* Check those patients who died 4 days within the new antibiotic days (Not Done yet). **Is the new IV/IM antibiotic still required in this case?**
+
+In total, there were `r comma(rhee_infection %>% distinct(grid, adm_id) %>% nrow())` CAM-ICU encounters with presumed serious infection under Rhee's sepsis definition.  And all of these were also identified as suspected infection under Sepsis-3 definition.
+```{r}
+sepsis_comp <- cam_visits %>% 
+  select(grid, adm_id) %>% 
+  left_join(select(sepsis3, grid, adm_id, sofa, sepsis3)) %>% 
+  left_join(rhee_infection %>% 
+              distinct(grid, adm_id) %>% 
+              mutate(rhee = 1)) %>%
+  mutate(sepsis3 = if_else(is.na(sepsis3), 0, 1),
+         rhee = if_else(is.na(rhee), 0, 1))
+xtabs(~ sepsis3 + rhee, data = sepsis_comp, addNA = T) 
+```
+
+For the `r comma(rhee_infection %>% distinct(grid, adm_id) %>% nrow())` CAM-ICU encounters with infection under both definition, `r sepsis_comp %>% filter(rhee == 1, sofa < 2) %>% nrow()` had sofa score < 2, potentially they could be identified as sepsis under Rhee's sepsis definition.
+
+# Other Problems
+## Lab dates falling after discharge date
+`r percent(cam_visits %>% filter(hosp_days<=3) %>% nrow()/nrow(cam_visits))` of `r comma(nrow(cam_visits))` CAM-ICU encounters had 3 or fewer hospital days.  
+I made sure the infection onset day (for Rhee definition it's BC date and first QAD) is within hospital stay, but did not limit lab values or subsequent QADs.  
+**Do we need to limit everything within the hospital stay?**
+
+## DOB discrepancy
+When comparing the DOBs in the new demographic files and in our old *Samuels_Delirium_STATIC_20180718.csv* file, I found some discrepancies.  Some of the DOBs are more than a year apart (see below).  Luckily these are not changed GRIDs, so we don’t really need to use them now, but this makes me wonder whether there are two different sets of shifted dates for some GRIDs even though the GRIDs were never changed.
+```{r}
+#. Get DOB for all messed-up ID --------------------------
+static_raw <- read_csv("../../Mito Delirium BioVU Data/Data/Samuels_Delirium_STATIC_20180718.csv") %>% 
+  mutate(DOB = mdy(DOB))  
+names(static_raw) <- str_to_lower(names(static_raw))  
+  
+demo_file <- list.files(path = "../../Mito Delirium BioVU Data/Demographics/", 
+                        pattern = "_demo.txt$", full.names = T)
+demo_raw <- NULL
+for (file in demo_file){
+  demo_raw %<>% 
+    bind_rows(read_tsv(file, na = c("", "NA", "null"),
+                       col_types = "cccnnnnnnnccc"))
+}
+names(demo_raw) <- str_to_lower(names(demo_raw))
+demo_raw %<>% 
+  distinct() %>% 
+  mutate(dob = ymd(dob))
+
+demo_raw %>% 
+  select(grid, dob) %>% 
+  inner_join(
+    static_raw %>% 
+      select(grid, dob),
+    by = "grid") %>% 
+  filter(dob.x != dob.y) %>% 
+  mutate(diff = dob.x - dob.y) %>% 
+  filter(abs(diff) > 10)
+```
+
+
+
+
+# Next steps
+
+* To identify acute organ dysfunction, baseline lab values are defined as the best values during hospitalization since all our infections are "present on admission" (BC day occuring on hospital day 1 or 2) based on Rhee's definition.
+* **How to calculate mean arterial pressure (MAP)?** I found this fomula online $\frac{SBP + 2DBP}{3}$, is it correct?
