@@ -70,7 +70,9 @@ infection_sofa_l2 %>%
 infection_sofa_l2  %>% 
   select(grid, adm_id, onset_date, lab_date, starts_with('sofa'))
 
+
 write_csv(sepsis1, "../output/sepsis3_20191011.csv")
+
 
 
 # ## keep organ system sofa scores
