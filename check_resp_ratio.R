@@ -1,5 +1,6 @@
-## To calculate PaO2/FiO2 and compare with the available ratio data
+## 1. To calculate PaO2/FiO2 and compare with the available ratio data
 ## decided to use calculated PaO2/FiO2 ratio
+## 2. To calculate SpO2/FiO2
 
 library(tidyverse)
 library(readxl)
@@ -191,4 +192,57 @@ ratio_calc %>%
 
 
 write_csv(ratio_calc, "../output/pao2_fio2_ratio_calc_20190927.csv")
+
+
+#> O2 saturation data ------------------------------------
+#>> out of range value ------------------------
+file_names <- list.files("../../Mito Delirium BioVU Data/Lab values/O2Sat",
+                         pattern = ".xlsx$",
+                         full.names = T)
+so2_oor <- NULL
+for (file in file_names) {
+  so2_oor <- so2_oor %>% 
+    bind_rows(read_excel(file, sheet = 2))
+}
+Hmisc::describe(so2_oor) #27 rows
+so2_raw <- so2_oor %>% 
+  rename(oor_value = `O2Sat %`) %>% 
+  mutate(`O2Sat %` = as.numeric(str_extract(oor_value, "[[:digit:]]+")))
+so2_raw %>% 
+  distinct(oor_value, `O2Sat %`)
+# only three oor values >99, >100, >110
+#>> normal value --------------------
+for (file in file_names) {
+  so2_raw <- so2_raw %>% 
+    bind_rows(read_excel(file))
+}
+names(so2_raw) <- str_to_lower(names(so2_raw))
+
+# check values
+
+so2_raw %<>% 
+  distinct() %>% 
+  select(-oor_value) %>% 
+  mutate(lab_date = as_date(lab_date),)
+Hmisc::describe(so2_raw)
+
+so2_raw %>% 
+  filter(`o2sat %` > 100.) %>% 
+  count(`o2sat %`)
+
+
+sf_ratio <- so2_raw %>% 
+  rename(so2 = `o2sat %`) %>% 
+  mutate(so2_c = if_else(so2 > 100, 100, so2)) %>% 
+  inner_join(fio2_raw1) %>% 
+  mutate(ratio_c = round(so2_c/fio2_c, 0)) %>% 
+  group_by(grid, lab_date, lab_time) %>% 
+  filter(ratio_c == min(ratio_c)) %>% 
+  ungroup() %>% 
+  distinct() %>% 
+  filter(ratio_c != Inf)
+sf_ratio %>% 
+  filter(ratio_c > 10000)
+Hmisc::describe(sf_ratio)
+write_csv(sf_ratio, "../output/spo2_fio2_ratio_calc_20191010.csv")
 
