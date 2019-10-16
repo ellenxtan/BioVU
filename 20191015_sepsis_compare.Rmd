@@ -1,0 +1,238 @@
+---
+title: "Identify Sepsis"
+author: "Fei Ding"
+date: "October 16, 2019"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+
+
+```{r setup, include = FALSE}
+library(tidyverse)
+library(scales)
+library(kableExtra)
+library(VennDiagram)
+library(magrittr)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+dob_dis <- read_csv("../output/dob_discrepancy.csv") 
+cam_visits <- read_csv("../output/cam_stay_20190925.csv") 
+sepsis3 <- read_csv("../output/sepsis3_20191014.csv")
+rhee_sepsis <- read_csv("../output/sepsis_rhee_20191015.csv")
+sepsis_comp <- cam_visits %>% 
+  select(grid, adm_id) %>% 
+  left_join(sepsis3 %>% 
+              select(grid, adm_id, sofa, sepsis3, data_type)) %>% 
+  left_join(rhee_sepsis %>% 
+              select(grid, adm_id, rhee)) %>%  
+  mutate(sepsis3_infection = if_else(is.na(sepsis3), 0, 1),
+         sepsis3 = if_else(is.na(sepsis3), 0, sepsis3),
+         rhee_infection = if_else(is.na(rhee), 0, 1),
+         rhee = if_else(is.na(rhee), 0, rhee))
+
+sepsis_comp %>% 
+  semi_join(dob_dis)
+sepsis_comp %>% 
+  semi_join(dob_dis) %>% 
+  distinct(grid)
+```
+
+# DOB discrepancy
+As discussed in last meeting, the following 15 patients with DOB discrepancy > 10 days were removed from our final results.  
+```{r}
+dob_dis %>% filter(abs(diff) > 10) #24 pts total, 15 had diff > 10 
+cam_visits %<>% anti_join(dob_dis, by = "grid")
+sepsis3 %<>% anti_join(dob_dis, by = "grid")
+rhee_sepsis %<>% anti_join(dob_dis, by = "grid")
+sepsis_comp %<>% anti_join(dob_dis, by = "grid")
+```
+
+
+# Sepsis-3 definition
+
+**NOTE:** Deviation from original definition were **bold (need more discussion)** or _italic (decided deviation)_.
+
+1. For each CAM-ICU encounter, identify the first episode of suspected infection _within $\pm1$ day of hopital admission date_.
+    * If the antibiotic was given first, the culture sampling must have been obtained within 1 day.
+    * If the culture sampling was first, the antibiotic must have been ordered within 3 days.
+    * The onset date of infection was the date on which the first of these two events occured.
+    * __We used only blood culutre instead of body fluid cultures (blood, urine, cerebrospinal fluid, etc)__.
+2. For each suspected infection, find worst daily SOFA score for the time window from 2 day before to 1 day after the onset date of infection.
+    * Central nervous system SOFA score calculated _based on RASS Method C in the Modified SOFA score paper_.  
+    * Respiration SOFA score calculated using both PaO~2~/FiO~2~(PF) ratio _and SpO~2~/FiO~2~(SF) ratio_.
+        * FiO~2~ values > 100 were excluded. 1 < FiO~2~ <= 100 were converted to 0-1. 
+        * SpO~2~ values > 100 were converted to 100.
+    * __We used only creatinine data for renal SOFA, no urine output data__.
+    * All the lab/drug dates are in the range of from 3 days before admission date to discharge date. 
+    * All non-numerical lab values were converted to upper/lower limit or mean of the range.  
+   
+    
+Rass score | PF or SF ratio and Ventilation |SOFA score
+-----------|-----|------
+$\ge$ 0 | PF $\ge$ 400 or SF $\ge$ 512 | 0  
+-1 | PF < 400 or SF < 512 | 1
+-2 | PF < 300 or SF < 357 | 2
+-3 | PF < 200 or SF < 214 with ventilation | 3
+-4 to -5 | PF < 100 or SF < 89 with ventilation | 4
+
+3. Suspected infection with a SOFA score $\ge 2$ is considered sepsis __assuming baseline SOFA score is zero__.
+
+
+
+
+
+
+## Distribution of SOFA score
+`r paste0(comma(sum(sepsis3$sepsis3 == 1)), " (", percent(sum(sepsis3$sepsis3 == 1)/nrow(sepsis3)), ")")` out of the `r comma(nrow(sepsis3))` suspected infections had a SOFA score $\ge 2$.
+```{r}
+summary(sepsis3$sofa) 
+ggplot(sepsis3) +
+  geom_histogram(aes(x = sofa), binwidth = 1) +
+  labs(title = "Distribution of SOFA score") 
+```
+
+## Missing Data
+Missing data analysis below is based on the first worst SOFA of each suspected infection.  
+Respiration system had the most missing data despite that we added SF ratio.  PaO2 had the most amount of data, which only covers fewer than 40% of infections.  SpO2 had FiO2 had even fewer data, covering fewer than 30% of infections.
+```{r}
+sepsis3 %>% 
+  select(sofa_respiration, sofa_coagulation, sofa_liver, sofa_cardio, sofa_cns, sofa_renal) %>% 
+  sapply(function(x) percent(sum(is.na(x))/length(x))) %>% 
+  kable(caption = "Percent of missing data for each system", col.names = "% missing", full_width = F) %>% 
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+sepsis3 %>% 
+  count(data_type) %>% 
+  mutate(pct = percent(n/nrow(sepsis3), accuracy = 0.01)) %>% 
+  kable(caption = "Data composition of all suspected infections") %>% 
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+```
+
+Missing in SOFA < 2
+```{r}
+sepsis3 %>% 
+  filter(sofa < 2) %>% 
+  select(sofa_respiration, sofa_coagulation, sofa_liver, sofa_cardio, sofa_cns, sofa_renal) %>% 
+  sapply(function(x) percent(sum(is.na(x))/length(x))) %>% 
+  kable(caption = "Percent of missing data for each system", col.names = "% missing", full_width = F) %>% 
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+sepsis3 %>% 
+  filter(sofa < 2) %>% 
+  count(data_type) %>% 
+  mutate(pct = percent(n/sum(sepsis3$sofa < 2, na.rm = T), accuracy = 0.1)) %>% 
+  kable(caption = "Data composition for SOFA < 2") %>% 
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+```
+
+# Rhee definition
+
+1. For each CAM-ICU encounter, identify presumed serious infection .
+    * Blood culture (BC) obtained _within $\pm1$ day of hopital admission date_, AND
+    * $\ge 4$ QADs starting within $\pm2$ day of BC day.
+        * __First QAD should be no later than discharge date, but no such limit for subsequent QADs__.
+        * A gap of a single calendar day between the same antibiotic count as QADs.
+        * If the paitent died before 4 QADs, the paitent can still qualify for presumed infection as long as they have consecutive QADs until 1 day prior to death. 
+        * There must be at least one new IV/IM antibiotic within the $\pm2$ day window of BC day.
+2. For each presumed infection, if any of the acute organ dysfunction criteria was met within the $\pm2$ day window of BC day, it is a sepsis.
+    * Since we limited BC day within $\pm1$ day of hopital admission date, all of our infections are "present-on-admission infection".  Baseline lab values were the best value during hospitalization, from 3 days before admission date to discharge date.
+    * __Our vasopressor don't have phenlyephrine or vasopressin__.
+    * __We don't have eGFR data or ICD-9-CM code for end-stage kidney disease__.
+    * __The platelet count criteria is <100 cells/$\mu$L, but I did not see any of our lab value lower than 0.1x10^3^/$\mu$L__.
+        
+
+# Compare two definitions
+Out of `r comma(nrow(cam_visits))` ICU encounters with CAM-ICU assessments, 
+
+* Using __Sepsis-3__ definition
+    * `r paste0(comma(nrow(sepsis3)), " (", percent(nrow(sepsis3)/nrow(cam_visits)), ")")` had suspected infections
+    * __`r paste0(comma(sum(sepsis3$sepsis3 == 1)), " (", percent(sum(sepsis3$sepsis3 == 1)/nrow(sepsis3)), ")")`__ of suspected infections had a SOFA score $\ge 2$.  
+    * Overall, __`r percent(sum(sepsis3$sepsis3 == 1)/nrow(cam_visits))`__ ICU encounters had sepsis, that is __`r comma(sepsis3 %>% filter(sepsis3 == 1) %>% distinct(grid) %>% nrow())`__ distinct patients.  
+* Using __Rhee__ definition
+    * `r paste0(comma(nrow(rhee_sepsis)), " (", percent(nrow(rhee_sepsis)/nrow(cam_visits)), ")")` had presumed infections
+    * __`r paste0(comma(sum(rhee_sepsis$rhee == 1)), " (", percent(sum(rhee_sepsis$rhee == 1)/nrow(rhee_sepsis)), ")")`__ of presumed infections had acute organ dysfunction.  
+    * Overall, __`r percent(sum(rhee_sepsis$rhee == 1)/nrow(cam_visits))`__ ICU encounters had sepsis, that is __`r comma(rhee_sepsis %>% filter(rhee == 1) %>% distinct(grid) %>% nrow())`__ distinct patients.
+
+```{r}
+sensitivity <- sepsis_comp %>% filter(rhee == 1, sepsis3 == 1) %>% nrow() / 
+  sepsis_comp %>% filter(sepsis3 == 1) %>% nrow()
+specificity <- sepsis_comp %>% filter(rhee == 0, sepsis3 == 0) %>% nrow() / 
+  sepsis_comp %>% filter(sepsis3 == 0) %>% nrow()
+```
+
+## Sepsis-3 vs. Rhee 
+Sensitivity and specificity of Rhee definition are `r percent(sensitivity)` and `r percent(specificity)` respectively.
+
+```{r}
+sepsis_comp %<>% 
+  mutate(sepsis3 = factor(sepsis3, levels = c(1, 0)),
+         rhee = factor(rhee, levels = c(1, 0)),
+         sepsis3_infection = factor(sepsis3_infection, levels = c(1, 0)),
+         rhee_infection = factor(rhee_infection, levels = c(1, 0))
+         )
+xtabs(~ rhee + sepsis3, data = sepsis_comp, addNA = T)
+grid.newpage()
+venn.plot <- draw.pairwise.venn(area1      = sepsis_comp %>% filter(sepsis3 == 1) %>% nrow(),
+                                area2      = sepsis_comp %>% filter(rhee == 1) %>% nrow(),
+                                cross.area = sepsis_comp %>% filter(rhee == 1, sepsis3 == 1) %>% nrow(),
+                                category   = c("Sepsis-3", "Rhee"),
+                                fill = c("blue", "red"),
+                                lty = "blank",
+                                ext.pos = 180)
+```
+
+## Sepsis-3 infection vs. Rhee infection
+```{r}
+sensitivity <- sepsis_comp %>% filter(rhee_infection == 1, sepsis3_infection == 1) %>% nrow() / 
+  sepsis_comp %>% filter(sepsis3_infection == 1) %>% nrow()
+specificity <- sepsis_comp %>% filter(rhee_infection == 0, sepsis3_infection == 0) %>% nrow() / 
+  sepsis_comp %>% filter(sepsis3_infection == 0) %>% nrow()
+```
+
+
+Sensitivity and specificity of Rhee definition of infection are `r percent(sensitivity)` and `r percent(specificity)` respectively.  In other words, all the infections identified by Rhee's definition are also infections under Sepsis-3 definition.
+```{r}
+xtabs(~ rhee_infection + sepsis3_infection, data = sepsis_comp, addNA = T)
+grid.newpage()
+venn.plot <- draw.pairwise.venn(area1      = sepsis_comp %>% filter(sepsis3_infection == 1) %>% nrow(),
+                                area2      = sepsis_comp %>% filter(rhee_infection == 1) %>% nrow(),
+                                cross.area = sepsis_comp %>% filter(rhee_infection == 1, sepsis3_infection == 1) %>% nrow(),
+                                category   = c("Sepsis-3 Infection", "Rhee Infection"),
+                                fill = c("blue", "red"),
+                                lty = "blank",
+                                cat.pos = c(0, 0),
+                                cat.dist= c(-0.02, -0.02)
+                                )
+
+```
+
+## Sepsis-3 vs. Rhee in infections identified by both definitions
+```{r}
+sensitivity <- sepsis_comp %>% filter(rhee_infection == 1, rhee == 1, sepsis3 == 1) %>% nrow() / 
+  sepsis_comp %>% filter(rhee_infection == 1, sepsis3 == 1) %>% nrow()
+specificity <- sepsis_comp %>% filter(rhee_infection == 1, rhee == 0, sepsis3 == 0) %>% nrow() / 
+  sepsis_comp %>% filter(rhee_infection == 1, sepsis3 == 0) %>% nrow()
+```
+In these `r comma(sepsis_comp %>% filter(rhee_infection == 1) %>% nrow())` infections, Sensitivity and specificity of Rhee definition are `r percent(sensitivity)` and `r percent(specificity)` respectively.  
+So even when we only consider infections identified by both definitions, Sepsis-3 still identify more sepsis compared to Rhee. 
+```{r}
+sepsis_comp %>% 
+  filter(rhee_infection == 1) %>% 
+  with(xtabs(~rhee+sepsis3))
+grid.newpage()
+venn.plot <- draw.pairwise.venn(area1      = sepsis_comp %>% filter(rhee_infection == 1, sepsis3 == 1) %>% nrow(),
+                                area2      = sepsis_comp %>% filter(rhee_infection == 1, rhee == 1) %>% nrow(),
+                                cross.area = sepsis_comp %>% filter(rhee_infection == 1, sepsis3 == 1, rhee == 1) %>% nrow(),
+                                category   = c("Sepsis-3", "Rhee"),
+                                fill = c("blue", "red"),
+                                lty = "blank",
+                                ext.pos = 180
+)
+
+```
+

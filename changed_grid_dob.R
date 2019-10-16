@@ -94,10 +94,10 @@ changed_grid_full %>%
 
 
 
-## compare dob in demo vs. static ---------------------------------------
+#. compare dob in demo vs. static ---------------------------------------
 static_raw %<>%
   mutate(dob = mdy(dob))
-demo_raw %>% 
+grid_dob_prob <- demo_raw %>% 
   select(grid, dob) %>% 
   inner_join(
     static_raw %>% 
@@ -105,6 +105,7 @@ demo_raw %>%
     by = "grid") %>% 
   filter(dob.x != dob.y) %>% 
   mutate(diff = dob.x - dob.y) %>% 
+  arrange(grid) %>% 
   print(n = 30)
 changed_grid %>% 
   filter(updated_grid %in% c("R205380161", "R202346769"))
@@ -142,8 +143,8 @@ demo_raw %>%
   filter(dob.x != dob.y, (grid %in% changed_grid$old_grid | grid %in% changed_grid$updated_grid))
 
 
-
-
+  
+write_csv(grid_dob_prob, "../output/dob_discrepancy.csv")
 
 
 

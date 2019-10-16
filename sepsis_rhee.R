@@ -4,11 +4,13 @@ library(magrittr)
 library(lubridate)
 
 #. Data import and clean ----------------------------------------------------
-load("../output/data_raw.RData")
+static_raw <- read_csv("../../Mito Delirium BioVU Data/Data/Samuels_Delirium_STATIC_20180718.csv")
 changed_grid <- read_csv("../output/changed_grid_dob_20190924.csv")
 cam_visits <- read_csv("../output/cam_stay_20190925.csv") 
 blood_raw <- read_excel("../../Mito Delirium BioVU Data/Phenotype data/culture_merge.xlsx",
                         sheet = "Blood Culture Days")
+
+names(static_raw) <- str_to_lower(names(static_raw))
 names(blood_raw) <- str_to_lower(names(blood_raw))
 names(changed_grid) <- str_to_lower(names(changed_grid))
 
@@ -29,7 +31,7 @@ abx_raw <- med_raw %>%
   filter(drug_class == "antibiotic") %>% 
   select(-drug_class) 
 
-#> clean up blood cultur data -------------------------------------------------
+#> clean up blood culture data -------------------------------------------------
 ## convert messed-up GRIDs and dates 
 length(unique(blood_raw$grid))
 sum(unique(blood_raw$grid) %in% unique(static_raw$grid)) 
@@ -164,31 +166,90 @@ qads %>%
   filter(first_qad_date > dc_date)
 
 
-
-# filter by >= 4 QADs, worst case, 3 same antibiotics in 5 with one day gap inbetween
-qads_3d <- qads %>%  
+# calculate # of calendar days, # of drug days, max gap for each QAD sequence
+qads_grp <- qads %>%  
   filter(new_abx_this == 1) %>%  # remove abx not initiated in current QAD sequence since they are not counted as QADs.
   distinct(grid, adm_id, adm_date, dc_date, blood_date, first_qad_date, drug_date) %>%
   group_by(grid, adm_id, adm_date, dc_date, blood_date, first_qad_date) %>%
-  summarise(max_day = max(drug_date - first_qad_date) + 1,
+  summarise(max_day = as.numeric(max(drug_date - first_qad_date) + 1),
             n_day = n_distinct(drug_date),
-            max_gap = max(drug_date - lag(drug_date), na.rm = T),
-            ) %>% 
-  filter(max_day >= 4, n_day >= 3,  max_gap <= 2) %>% 
+            max_gap = if_else(max_day == 1, 0, as.numeric(max(drug_date - lag(drug_date), na.rm = T)))
+  ) %>% 
   ungroup()
-qads_3d %>% 
-  filter(max_gap == -Inf) %>% 
-  count(max_day)
-qads_3d %>% 
+
+qads_grp %>% 
+  count(max_day, n_day, max_gap)
+ 
+# filter by >= 4 QADs, worst case, 3 same antibiotics in 5 with one day gap inbetween
+qads_ge4d <- qads_grp %>% 
+  filter(max_day >= 4, n_day >= 3,  max_gap <= 2) 
+qads_ge4d %>% 
   count(max_day, n_day, max_gap)
 
-# filter by having at least on new IV/IM within 2 days window of blood date.
+# for <= 4 calendar days, consider death
+qads_l4d <- qads_grp %>%  
+  filter(max_day <= 3, max_gap <= 1) %>% 
+  mutate(last_qad = first_qad_date + max_day - 1)
+qads_l4d %>% 
+  count(max_day, n_day, max_gap)
+
+#> check death  data --------------------------------
+static_raw %>% 
+  select(grid, dod, death_flag) %>% 
+  Hmisc::describe()
+
+static_raw1 <- static_raw %>% 
+  select(grid, dod, death_flag) %>% 
+  left_join(changed_grid, by = c("grid" = "old_grid")) %>% 
+  mutate(
+    dod = if_else(!is.na(updated_grid),
+                  mdy(dod) - old_dob + updated_dob,
+                  mdy(dod)),
+    grid = if_else(!is.na(updated_grid), updated_grid, grid)
+  ) %>% 
+  distinct(grid, dod, death_flag) %>% 
+  arrange(grid, death_flag, dod)
+
+## check data
+static_raw1 %>% 
+  group_by(grid) %>% 
+  filter(n() > 1)
+static_raw1 %>% 
+  filter(!is.na(dod), death_flag != 1)
+static_raw1 %>% 
+  filter(is.na(dod), death_flag != 0)
+static_raw1 %>% 
+  group_by(grid) %>% 
+  filter(n_distinct(dod, na.rm = T) > 1)
+
+## check QAD for these two GRIDs
+qads %>% 
+  filter(grid %in% c("R213850517", "R297625095"))
+## All we want is death date now
+death_date <- static_raw1 %>% 
+  filter(!is.na(dod)) %>%  
+  group_by(grid) %>% 
+  summarise(dod = min(dod)) %>% 
+  ungroup()
+
+
+qads_l4d_death <- sqldf::sqldf('SELECT * 
+             FROM qads_l4d as t1
+             INNER JOIN death_date as t2
+             ON t1.grid = t2.grid AND dod BETWEEN last_qad AND last_qad + 1') %>% 
+  as_tibble() %>% 
+  select(-last_qad, -grid..11)
+  
+
+# filter by having at least one new IV/IM within 2 days window of blood date.
 qads_ivm <- qads %>%  
   filter(new_abx_this == 1) %>%
   filter(new_abx == 1, ivm == 1, abs(drug_date - blood_date) <= 2) %>%
-  distinct(grid, adm_id, adm_date, dc_date, blood_date, first_qad_date) 
+  distinct(grid, adm_id, adm_date, dc_date, blood_date, first_qad_date)
+
 # combining the two criteria above
-first_qad1 <- qads_3d %>% 
+first_qad1 <- qads_ge4d %>% 
+  bind_rows(qads_l4d_death) %>% 
   inner_join(qads_ivm, by = c("grid", "adm_id", "adm_date", "dc_date", "blood_date",  "first_qad_date"))
 first_qad1 %>% 
   distinct(grid, first_qad_date)
@@ -197,9 +258,10 @@ first_qad1 %>%
 first_qad1 %>% 
   distinct(grid, adm_id)
 
-## Now only need to check those QAD sequence with gap = 2 days ----------------
+#. Now only need to check those QAD sequence with gap = 2 days ----------------
 first_qad1 %>% 
   count(max_day, n_day, max_gap)
+
 first_qad1 %>% 
   filter(max_gap == 2, n_day == 3, max_day == 4)
 ## not 4 QAD, new drug only after gap
@@ -210,6 +272,7 @@ qads %>%
 qads %>% 
   filter(new_abx_this == 1) %>% 
   filter(grid == 'R200617056', first_qad_date == ymd(20091024))
+
 first_qad1 %>% 
   filter(max_gap == 2, n_day == 3, max_day == 5)
 ## 4 QAD, only one drug
@@ -259,31 +322,15 @@ qads_gap_rm <- qads_gap2 %>%
   summarise(any_gap_all_new = sum(all_new)) %>% 
   ungroup() %>% 
   filter(any_gap_all_new == 1) # remove 581 sequences
+
 # remove those unqualified sequences
 rhee_infection <- first_qad1 %>% 
   anti_join(qads_gap_rm,
             by = c("grid", "adm_id", "adm_date", "dc_date", "blood_date", "first_qad_date"))  %>% 
   distinct(grid, adm_id, adm_date, dc_date, blood_date)
-rhee_infection %>% distinct(grid, adm_id) #16210
-# check death  ======================================
-
-# compare with sepsis3 infection
-sepsis3 <- read_csv("../output/sepsis3_20190927.csv") %>% 
-  mutate(sepsis3 = 1) 
-sepsis_comp <- cam_visits %>% 
-  select(grid, adm_id) %>% 
-  left_join(select(sepsis3, grid, adm_id, sofa, sepsis3)) %>% 
-  left_join(rhee_infection %>% 
-              distinct(grid, adm_id) %>% 
-              mutate(rhee = 1)) %>%
-  mutate(sepsis3 = if_else(is.na(sepsis3), 0, 1),
-         rhee = if_else(is.na(rhee), 0, 1))
-xtabs(~ sepsis3 + rhee, data = sepsis_comp, addNA = T)
-sepsis_comp %>% filter(rhee == 1, sofa < 2) %>% nrow()
-## All rhee infections are sepsis3 infections
+rhee_infection %>% distinct(grid, adm_id) #16975
 
 
-write_csv(rhee_infection, "../output/rhee_infection_20191002.csv")
+write_csv(rhee_infection, "../output/rhee_infection_20191015.csv")
 
-  
   

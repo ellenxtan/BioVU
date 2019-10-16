@@ -3,9 +3,11 @@ library(readxl)
 library(magrittr)
 library(lubridate)
 
-rhee_infection <- read_csv("../output/rhee_infection_20191002.csv")
+rhee_infection <- read_csv("../output/rhee_infection_20191015.csv")
 changed_grid <- read_csv("../output/changed_grid_dob_20190924.csv")
-
+static_raw <- read_csv("../../Mito Delirium BioVU Data/Data/Samuels_Delirium_STATIC_20180718.csv") %>% 
+  select(GRID)
+names(static_raw) <- str_to_lower(names(static_raw))
 
 #. Vasopressor initiation ------------------
 med_raw <- NULL
@@ -369,10 +371,39 @@ rhee_sepsis <- rhee_infection %>%
   left_join(bilirubin_dbl) %>% 
   left_join(platelet_dcl) %>% 
   left_join(lactate_ge2) %>% 
-  mutate(rhee_sepsis = if_else(is.na(new_pressor | new_vent | creat_dbl | bil_dbl | plt_dcl | lactate_ge2), 0, 1)) %>% 
+  mutate(rhee = if_else(is.na(new_pressor | new_vent | creat_dbl | bil_dbl | plt_dcl | lactate_ge2), 0, 1)) %>% 
   group_by(grid, adm_id, adm_date, dc_date) %>% 
-  slice(which.max(rhee_sepsis)) %>% 
+  slice(which.max(rhee)) %>% 
   ungroup()
 rhee_sepsis %>% 
-  count(rhee_sepsis)
-write_csv(rhee_sepsis, "../output/sepsis_rhee_20191014.csv")
+  count(rhee)
+write_csv(rhee_sepsis, "../output/sepsis_rhee_20191015.csv")
+
+
+#. compare with sepsis3 infection -------------------------------
+cam_visits <- read_csv("../output/cam_stay_20190925.csv") 
+sepsis3 <- read_csv("../output/sepsis3_20191014.csv")
+
+sepsis3 %>% count(sepsis3)
+
+
+sepsis_comp <- cam_visits %>% 
+  select(grid, adm_id) %>% 
+  left_join(sepsis3 %>% 
+              select(grid, adm_id, sofa, sepsis3, data_type)) %>% 
+  left_join(rhee_sepsis %>% 
+              select(grid, adm_id, rhee)) %>%  
+  mutate(sepsis3_infection = if_else(is.na(sepsis3), 0, 1),
+         sepsis3 = if_else(is.na(sepsis3), 0, sepsis3),
+         rhee_infection = if_else(is.na(rhee), 0, 1),
+         rhee = if_else(is.na(rhee), 0, rhee))
+xtabs(~ sepsis3_infection + rhee_infection, data = sepsis_comp, addNA = T)
+xtabs(~ sepsis3 + rhee, data = sepsis_comp, addNA = T)
+sepsis_comp %>% 
+  filter(rhee_infection == 1) %>% 
+  with(xtabs(~sepsis3 + rhee))
+
+sepsis_comp %>% filter(rhee == 1, sepsis3 == 0) %>% count(data_type)
+
+## All rhee infections are sepsis3 infections
+

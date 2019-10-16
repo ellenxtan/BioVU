@@ -228,7 +228,8 @@ Hmisc::describe(so2_raw)
 
 so2_raw %>% 
   filter(`o2sat %` > 100.) %>% 
-  count(`o2sat %`)
+  count(`o2sat %`) %>% 
+  print(n = 30)
 
 
 sf_ratio <- so2_raw %>% 
@@ -246,3 +247,41 @@ sf_ratio %>%
 Hmisc::describe(sf_ratio)
 write_csv(sf_ratio, "../output/spo2_fio2_ratio_calc_20191010.csv")
 
+
+#. check why missing -----------------------
+cam_visits <- read_csv("../output/cam_stay_20190925.csv") 
+infections <- read_csv("../output/sepsis3_all_infections_20190927.csv")
+infections_w1d <- infections %>% 
+  filter(onset_day %in% 0:2)
+ratio_raw <- po2_raw %>% 
+  full_join(fio2_raw1) %>% 
+  full_join(so2_raw)
+ratio_raw1 <- sqldf::sqldf('SELECT * 
+                               FROM infections_w1d as t1
+                               LEFT JOIN ratio_raw as t2 
+                               ON t1.grid = t2.grid AND lab_date <= dc_date AND lab_date BETWEEN onset_date-2 AND onset_date+1') %>% 
+  as_tibble() %>% 
+  select(-grid..7) 
+ratio_raw1 %>%
+  select(`arterial po2 mmhg`:`o2sat %`) %>% 
+  Hmisc::describe() # fio2 had the most missing, then o2sat, then po2
+l1 <- ratio_raw1 %>% 
+  filter(!is.na(`arterial po2 mmhg`)) %>% 
+  distinct(grid, adm_id) #9736 encounters
+l2 <- ratio_raw1 %>% 
+  filter(!is.na(fio2)) %>% 
+  distinct(grid, adm_id) #7041 encounters
+l3 <- ratio_raw1 %>% 
+  filter(!is.na(`o2sat %`)) %>% 
+  distinct(grid, adm_id) #7369 encounters
+l3 %>% dplyr::setdiff(l1)
+ratio_raw1 %>% filter(grid == "R243497431", adm_id == 1)
+c(9736, 7041, 7369)/24827
+
+# check FiO2_c < 0.1 and get into SOFA calculation
+# only need to check the max FiO2 b/c higher FiO2,  higher SOFA score.
+ratio_raw1 %>% 
+  group_by(grid, adm_id) %>% 
+  summarise(fio2_c = max(fio2_c, na.rm = T)) %>% 
+  filter(fio2_c < 0.1, fio2_c >= 0)
+# Only up to 33 encounters, and if this has any effect, will miss a few sepsis.

@@ -468,7 +468,7 @@ ggplot(pf_ratio_daily) +
   geom_boxplot(aes(y = pf_ratio)) +
   scale_y_log10()
 
-#> O2/FiO2 Ratio data -----------------
+#> SpO2/FiO2 Ratio data -----------------
 sf_ratio_raw <- read_csv("../output/spo2_fio2_ratio_calc_20191010.csv")
 Hmisc::describe(sf_ratio_raw)
 sum(unique(sf_ratio_raw$grid) %in% static_raw$grid)
