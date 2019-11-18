@@ -23,13 +23,14 @@ for (i in 1:3) {
     ) 
 }
 med_raw %>% count(drug_class)
+med_raw %>% filter(drug_class == "pressor") %>% count(drug_name)
 pressor_raw <- med_raw %>% 
-  filter(drug_class == "pressor") %>% 
+  filter(drug_class == "pressor", drug_name != "DOBUTAMINE") %>% # Dobutamine is not listed as vasopressor in Rhee definition
   select(-drug_class) 
 pressor_raw %>% 
   select(drug_date, drug_name, starts_with('drug_route')) %>% 
   Hmisc::describe()
-#' not exactly the same names as in Rhee's paper 
+
 
 #> convert messed-up GRIDs and dates ---
 length(unique(pressor_raw$grid))
@@ -53,6 +54,7 @@ pressor_raw1 %>%
   count(drug_route1, drug_route2, drug_route3)
 
 # keep IV vasopressors only
+# In the supp. We only included intravenous administrations of vasopressors, and excluded vasopressors that were clearly single bolus injections rather than continuous infusions.
 pressor_raw1 %<>% 
   filter(drug_route1 == "IV" | drug_route2 == "IV" | drug_route3 == "IV")
 
@@ -209,6 +211,15 @@ creatinine_raw %>%
 creatinine_raw %<>% 
   filter(!is.na(`creat mg/dl`)) %>% 
   mutate(lab_date = as_date(lab_date))
+ggplot(creatinine_raw) +
+  geom_histogram(aes(x = `creat mg/dl`)) +
+  scale_y_log10()
+# ggplot(creatinine_raw) +
+#   geom_boxplot(aes(x ="", y = `creat mg/dl`))
+summary(creatinine_raw$`creat mg/dl`) 
+creatinine_raw %>% 
+  filter(`creat mg/dl` > 50)
+
 
 # find baseline for each hospitaliztion, then filter to find creatinine doubling within 2 day window 
 creatinine_dbl <- sqldf::sqldf('SELECT * 
@@ -224,12 +235,23 @@ creatinine_dbl <- sqldf::sqldf('SELECT *
   filter(lab_date >= blood_date - 2, 
          lab_date <= blood_date + 2,
          `creat mg/dl` >= 2*creat_bl) %>% 
-  ungroup() %>% 
+  ungroup()
+## check range of creatinine
+creatinine_dbl %>% 
+  select(creat_bl, `creat mg/dl`) %>% 
+  Hmisc::describe()
+creatinine_dbl %>% 
+  filter(`creat mg/dl` < 1.2)
+creatinine_dbl %>% 
+  filter(`creat mg/dl` < 1.2) %>% 
+  distinct(grid, adm_id, adm_date, dc_date, creat_bl)
+# get distinct BC dates
+creatinine_dbl_date <- creatinine_dbl %>% 
   distinct(grid, adm_id, adm_date, dc_date, blood_date) %>% 
   mutate(creat_dbl  = 1)
 
 
-#. biliburin doubling --------------------------------------------------------
+#. bilirubin doubling --------------------------------------------------------
 file_names <- list.files("../../Mito Delirium BioVU Data/Lab values/Bilirubin",
                          full.names = T)
 
@@ -273,6 +295,12 @@ bilirubin_raw %<>%
   filter(!is.na(`tbil (mg/dl)`)) %>% 
   mutate(lab_date = as_date(lab_date))
 
+ggplot(bilirubin_raw) +
+  geom_histogram(aes(x = `tbil (mg/dl)`)) +
+  scale_y_log10()
+summary(bilirubin_raw$`tbil (mg/dl)`) 
+bilirubin_raw %>% 
+  filter(`tbil (mg/dl)` > 50)
 # find baseline for each hospitaliztion, then filter to find bilirubin doubling within 2 day window 
 bilirubin_dbl <- sqldf::sqldf('SELECT * 
               FROM rhee_infection as t1
@@ -288,7 +316,15 @@ bilirubin_dbl <- sqldf::sqldf('SELECT *
          lab_date <= blood_date + 2,
          `tbil (mg/dl)` >= 2.0,
          `tbil (mg/dl)` >= 2*bil_bl) %>% 
-  ungroup() %>% 
+  ungroup() 
+## check range of bilirubin
+bilirubin_dbl %>% 
+  select(bil_bl, `tbil (mg/dl)`) %>% 
+  Hmisc::describe()
+bilirubin_dbl %>% 
+  filter(`tbil (mg/dl)` > 50)
+# bilirubin double dates
+bilirubin_dbl_date <- bilirubin_dbl %>% 
   distinct(grid, adm_id, adm_date, dc_date, blood_date) %>% 
   mutate(bil_dbl  = 1)
 
@@ -340,6 +376,15 @@ platelet_raw %<>%
   filter(!is.na(`plt-ct (thou/ul)`)) %>%
   mutate(lab_date = as_date(lab_date))
 
+ggplot(platelet_raw) +
+  geom_histogram(aes(x = `plt-ct (thou/ul)`)) +
+  scale_y_log10()
+# ggplot(creatinine_raw) +
+#   geom_boxplot(aes(x ="", y = `creat mg/dl`))
+summary(platelet_raw$`plt-ct (thou/ul)`) 
+platelet_raw %>% 
+  filter(`plt-ct (thou/ul)` > 5000)
+
 # find baseline for each hospitaliztion, then filter to find platelet doubling within 2 day window
 platelet_dcl <- sqldf::sqldf('SELECT *
                               FROM rhee_infection as t1
@@ -353,23 +398,34 @@ platelet_dcl <- sqldf::sqldf('SELECT *
   group_by(grid, adm_id, adm_date, dc_date, blood_date) %>%
   filter(lab_date >= blood_date - 2,
          lab_date <= blood_date + 2,
-         plt_bl > 0.1,
-         `plt-ct (thou/ul)` < 0.1,
+         plt_bl > 100, # Kaveh think Rhee paper has a typo of platelets, should be 100x10^3 cells/uL
+         `plt-ct (thou/ul)` < 100,
          `plt-ct (thou/ul)` <= 0.5*plt_bl) %>%
-  ungroup() %>%
+  ungroup() 
+## check range of creatinine
+platelet_dcl %>% 
+  select(plt_bl, `plt-ct (thou/ul)`) %>% 
+  Hmisc::describe()
+platelet_dcl %>% 
+  filter(plt_bl > 1000)
+platelet_dcl %>% 
+  filter(plt_bl > 1000) %>% 
+  distinct(grid, adm_id, adm_date, dc_date, plt_bl)
+# get distinct BC dates
+platelet_dcl_date <- platelet_dcl %>%
   distinct(grid, adm_id, adm_date, dc_date, blood_date) %>%
   mutate(plt_dcl  = 1)
 
-#' The minimum plt count is 1000/ul, so no one met criteria.
+
 
 #. Put everything together -----------------------------------------------------
 ## keep the first blood date with the worst organ dysfunction value for each encounter
 rhee_sepsis <- rhee_infection %>% 
   left_join(pressor_new) %>% 
   left_join(vent_new) %>% 
-  left_join(creatinine_dbl) %>% 
-  left_join(bilirubin_dbl) %>% 
-  left_join(platelet_dcl) %>% 
+  left_join(creatinine_dbl_date) %>% 
+  left_join(bilirubin_dbl_date) %>% 
+  left_join(platelet_dcl_date) %>% 
   left_join(lactate_ge2) %>% 
   mutate(rhee = if_else(is.na(new_pressor | new_vent | creat_dbl | bil_dbl | plt_dcl | lactate_ge2), 0, 1)) %>% 
   group_by(grid, adm_id, adm_date, dc_date) %>% 
@@ -377,7 +433,7 @@ rhee_sepsis <- rhee_infection %>%
   ungroup()
 rhee_sepsis %>% 
   count(rhee)
-write_csv(rhee_sepsis, "../output/sepsis_rhee_20191015.csv")
+write_csv(rhee_sepsis, "../output/sepsis_rhee_20191115.csv")
 
 
 #. compare with sepsis3 infection -------------------------------

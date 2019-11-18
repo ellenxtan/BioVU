@@ -152,6 +152,11 @@ ratio_calc %<>%
   ungroup()
 ratio_calc %>% Hmisc::describe()
 
+ratio_calc %>% 
+  filter(fio2_c < 0.21) %>% 
+  Hmisc::describe() # for FiO2 < 0.21, 95% are < 0.1
+ratio_calc %>% 
+  filter(fio2_c >= 0.21)
 
 ratio_comp <- ratio_raw_min %>% 
   full_join(ratio_calc)
@@ -164,7 +169,9 @@ ratio_comp %>%
   print(n = 50)
 ratio_comp %>% 
   filter(abs(`po2/fi (mmhg)` - ratio_c) > 1, fio2 > 1) %>% 
-  print(n = 50)
+  print(n = 50) 
+# The raw ratio value from EHR is not very accurate, did not convert FiO2 > 1 to FiO2 < 1
+# will us calculated ratio
 
 ratio_comp %>% 
   filter(is.na(`po2/fi (mmhg)`)) %>% 
@@ -193,6 +200,40 @@ ratio_calc %>%
 
 write_csv(ratio_calc, "../output/pao2_fio2_ratio_calc_20190927.csv")
 
+#> Nasal O2 data -------------------------------
+file_names <- list.files("../../Mito Delirium BioVU Data/Lab values/Nasal_O2_rate/",
+                         pattern = ".xlsx$",
+                         full.names = T)
+nasal_o2_raw <- NULL
+for (file in file_names) {
+  if (file != file_names[8]) {
+    nasal_o2_raw %<>% 
+      bind_rows(read_excel(file))
+  } else {
+    # set 6 file has different lab time from other (AM/PM instead of 24 hours)
+    nasal_o2_raw %<>% 
+      bind_rows(read_excel(file) %>% 
+                  mutate(LAB_TIME = str_c(str_sub(LAB_TIME, -8, -1), ".0"))
+                )
+  }
+}
+names(nasal_o2_raw) <- str_to_lower(names(nasal_o2_raw))
+nasal_o2_raw %<>% distinct() %>% 
+  mutate(lab_date = as_date(lab_date))
+Hmisc::describe(nasal_o2_raw)
+ggplot(nasal_o2_raw) +
+  geom_histogram(aes(x = `naslo2 (l)`)) +
+  scale_x_log10()
+nasal_o2_raw %>% 
+  filter(`naslo2 (l)` > 100)
+
+# merge with FiO2 values to check
+nasal_o2_check <- fio2_raw1 %>% 
+  inner_join(nasal_o2_raw)
+nasal_o2_check %>% 
+  filter(fio2 == `naslo2 (l)`) %>% 
+  print(n = 100)
+# only 93 entries
 
 #> O2 saturation data ------------------------------------
 #>> out of range value ------------------------
@@ -232,6 +273,8 @@ so2_raw %>%
   print(n = 30)
 
 
+
+#> calculate SF ratio --------------------------------
 sf_ratio <- so2_raw %>% 
   rename(so2 = `o2sat %`) %>% 
   mutate(so2_c = if_else(so2 > 100, 100, so2)) %>% 
@@ -255,7 +298,8 @@ infections_w1d <- infections %>%
   filter(onset_day %in% 0:2)
 ratio_raw <- po2_raw %>% 
   full_join(fio2_raw1) %>% 
-  full_join(so2_raw)
+  full_join(so2_raw) %>% 
+  full_join(nasal_o2_raw)
 ratio_raw1 <- sqldf::sqldf('SELECT * 
                                FROM infections_w1d as t1
                                LEFT JOIN ratio_raw as t2 
@@ -263,7 +307,7 @@ ratio_raw1 <- sqldf::sqldf('SELECT *
   as_tibble() %>% 
   select(-grid..7) 
 ratio_raw1 %>%
-  select(`arterial po2 mmhg`:`o2sat %`) %>% 
+  select(`arterial po2 mmhg`:`naslo2 (l)`) %>% 
   Hmisc::describe() # fio2 had the most missing, then o2sat, then po2
 l1 <- ratio_raw1 %>% 
   filter(!is.na(`arterial po2 mmhg`)) %>% 
@@ -274,14 +318,24 @@ l2 <- ratio_raw1 %>%
 l3 <- ratio_raw1 %>% 
   filter(!is.na(`o2sat %`)) %>% 
   distinct(grid, adm_id) #7369 encounters
+l4 <- ratio_raw1 %>% 
+  filter(!is.na(`naslo2 (l)`)) %>% 
+  distinct(grid, adm_id) #1229 encounters
+
 l3 %>% dplyr::setdiff(l1)
 ratio_raw1 %>% filter(grid == "R243497431", adm_id == 1)
 c(9736, 7041, 7369)/24827
 
-# check FiO2_c < 0.1 and get into SOFA calculation
+ratio_raw1 %>% 
+  filter(!is.na(`naslo2 (l)`), is.na(fio2), !is.na(`arterial po2 mmhg`) | !is.na(`o2sat %`), 
+         `naslo2 (l)` < 10) %>% 
+  select(grid, adm_id, onset_date, lab_date, `arterial po2 mmhg`:`naslo2 (l)`) %>% 
+  distinct(grid, adm_id)# will eliminate missing value for ~900 encounters 
+
+# check FiO2_c < 0.21 that get into SOFA calculation
 # only need to check the max FiO2 b/c higher FiO2,  higher SOFA score.
 ratio_raw1 %>% 
   group_by(grid, adm_id) %>% 
   summarise(fio2_c = max(fio2_c, na.rm = T)) %>% 
-  filter(fio2_c < 0.1, fio2_c >= 0)
-# Only up to 33 encounters, and if this has any effect, will miss a few sepsis.
+  filter(fio2_c < 0.21, fio2_c >= 0)
+# Only up to 40 encounters, and if this has any effect, will miss a few sepsis.

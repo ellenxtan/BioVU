@@ -351,12 +351,16 @@ for (i in 1:3) {
     ) 
 }
 med_raw %>% count(drug_class)
+med_raw %>% filter(drug_class == "pressor") %>% count(drug_name)
 pressor_raw <- med_raw %>% 
-  filter(drug_class == "pressor") %>% 
+  filter(drug_class == "pressor", 
+         drug_name %in% c("DOBUTAMINE", "DOPAMINE", "EPINEPHRINE", "NOREPINEPHRINE")) %>% 
   select(-drug_class) 
 pressor_raw %>% 
-  select(drug_name, starts_with('drug_route')) %>% 
+  select(drug_date, drug_name, starts_with('drug_route')) %>% 
   Hmisc::describe()
+pressor_raw %>% 
+  filter(drug_route1 != "IV", is.na(drug_route2) | drug_route2 != "IV", is.na(drug_route3) | drug_route3 != "IV")
 
 #> convert messed-up GRIDs and dates ---
 length(unique(pressor_raw$grid))
