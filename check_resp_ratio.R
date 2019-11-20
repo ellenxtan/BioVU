@@ -234,6 +234,11 @@ nasal_o2_check %>%
   filter(fio2 == `naslo2 (l)`) %>% 
   print(n = 100)
 # only 93 entries
+fio2_raw1 %>% 
+  filter(fio2_c < 0.21)
+93/2199
+# Only 4% of the < 21 FiO2 values had a matching Nasal values 
+
 
 #> O2 saturation data ------------------------------------
 #>> out of range value ------------------------
@@ -292,7 +297,7 @@ write_csv(sf_ratio, "../output/spo2_fio2_ratio_calc_20191010.csv")
 
 
 #. check why missing -----------------------
-cam_visits <- read_csv("../output/cam_stay_20190925.csv") 
+
 infections <- read_csv("../output/sepsis3_all_infections_20190927.csv")
 infections_w1d <- infections %>% 
   filter(onset_day %in% 0:2)
