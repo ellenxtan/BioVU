@@ -267,6 +267,7 @@ demo <- demo_raw %>%
     )
 demo %>% Hmisc::describe()
 
+
 ## Calculate age at a given reference date 
 calc_age <- function(birthDate, refDate = Sys.Date()) {
   period <- as.period(interval(birthDate, refDate),
@@ -320,7 +321,7 @@ sum(unique(esrd_raw$grid) %in% unique(changed_grid$updated_grid))
 rhee_infection_ex <- sqldf::sqldf('SELECT * 
               FROM rhee_infection as t1
               INNER JOIN esrd_raw as t2 
-              ON t1.grid = t2.grid AND esrd_code_date BETWEEN adm_date - 3 AND dc_date') %>% 
+              ON t1.grid = t2.grid AND esrd_code_date BETWEEN blood_date - 2 AND blood_date + 2') %>% # on 12/4/2019 meeting, we decided to use same time window (within 2 days of BC day) for end-stage renal disease code 
   as_tibble() %>% 
   distinct(grid, adm_id, adm_date, dc_date, blood_date)
 rhee_infection1 <- rhee_infection  %>% 
@@ -367,7 +368,7 @@ sqldf::sqldf('SELECT *
               INNER JOIN esrd_raw as t2 
               ON t1.grid = t2.grid AND adm_date > esrd_code_date') %>% 
   as_tibble() %>% 
-  distinct(grid) #123 pts
+  distinct(grid) #133 pts
 esrd_raw %>% 
   filter(grid == "R200617056") %>% 
   arrange(esrd_code_date)
@@ -541,7 +542,7 @@ platelet_dcl_date <- platelet_dcl %>%
 
 
 
-#. Put everything together -----------------------------------------------------
+#. Put everything together for Rhee definition ---------------------------------
 ## keep the first blood date with the worst organ dysfunction value for each encounter
 rhee_sepsis <- rhee_infection %>% 
   left_join(pressor_new) %>% 
@@ -556,31 +557,51 @@ rhee_sepsis <- rhee_infection %>%
   ungroup()
 rhee_sepsis %>% 
   count(rhee)
-write_csv(rhee_sepsis, "../output/sepsis_rhee_20191203.csv")
+write_csv(rhee_sepsis, "../output/sepsis_rhee_20191217.csv")
 
 
-#. compare with sepsis3 infection and ICD9 code -------------------------------
+#. Find CAM-ICU admissions with sepsis code ------------------------------------
 cam_visits <- read_csv("../output/cam_stay_20190925.csv") 
-sepsis3 <- read_csv("../output/sepsis3_20191014.csv")
 sepsis_code_raw <- read_excel("../../Mito Delirium BioVU Data/Phenotype data/Sepsis Code Days.xlsx") %>% 
   mutate(`sepsis CODE_DATE` = as_date(`sepsis CODE_DATE`))
 
 names(sepsis_code_raw) <- str_to_lower(names(sepsis_code_raw))
+
+#> convert messed-up GRIDs and dates ---
+length(unique(sepsis_code_raw$grid))
+sum(unique(sepsis_code_raw$grid) %in% unique(static_raw$grid))  # check whether any new updated GRID
+sum(unique(sepsis_code_raw$grid) %in% unique(changed_grid$old_grid)) # 170
+sum(unique(sepsis_code_raw$grid) %in% unique(changed_grid$updated_grid)) # 181
+
+sepsis_code_raw1 <- sepsis_code_raw %>% 
+  left_join(changed_grid, by = c("grid" = "old_grid")) %>% 
+  mutate(
+    code_date = if_else(!is.na(updated_grid),
+                        `sepsis code_date` - old_dob + updated_dob,
+                        `sepsis code_date`),
+    grid = if_else(!is.na(updated_grid), updated_grid, grid)
+  ) %>% 
+  distinct(grid, code_date) %>% 
+  arrange(grid, code_date)
+sum(sepsis_code_raw1$grid %in% changed_grid$old_grid)
+
 sepsis_code <- sqldf::sqldf('SELECT *
              FROM cam_visits as t1
-             INNER JOIN sepsis_code_raw as t2
-             ON t1.grid = t2.grid AND `sepsis code_date` BETWEEN adm_date-1 AND dc_date') %>% 
+             INNER JOIN sepsis_code_raw1 as t2
+             ON t1.grid = t2.grid AND code_date BETWEEN adm_date-1 AND dc_date') %>% 
   as_tibble() %>% 
-  select(grid, adm_id, adm_date, dc_date, `sepsis code_date`) %>% 
-  mutate(sepsis_day = as.numeric(`sepsis code_date` - adm_date + 1)) %>% 
+  select(grid, adm_id, adm_date, dc_date, code_date) %>% 
+  mutate(sepsis_day = as.numeric(code_date - adm_date + 1)) %>% 
   group_by(grid, adm_id) %>% 
   summarise(sepsis_code_adm = 1,
-            sepsis_code_w1d = sum(sepsis_day %in% 0:2) > 0) %>% 
+            sepsis_code_w1d = if_else(sum(sepsis_day %in% 0:2) > 0, 1, 0)) %>% 
   ungroup()
 sepsis_code %>% 
   Hmisc::describe()
 
+#. compare rhee, sepsis3 and ICD9 code -------------------------------
 
+sepsis3 <- read_csv("../output/sepsis3_20191014.csv")
 
 rhee_sepsis %>% count(rhee)
 sepsis3 %>% count(sepsis3)
@@ -590,7 +611,7 @@ sepsis_comp <- cam_visits %>%
               select(grid, adm_id, sofa, sepsis3, data_type)) %>% 
   left_join(rhee_sepsis %>% 
               select(grid, adm_id, rhee)) %>%  
-  left_join(sepsis_code) %>% 
+  left_join(sepsis_code) %>%
   mutate(sepsis3_infection = if_else(is.na(sepsis3), 0, 1),
          sepsis3 = if_else(is.na(sepsis3), 0, sepsis3),
          rhee_infection = if_else(is.na(rhee), 0, 1),
@@ -605,13 +626,13 @@ xtabs(~ sepsis3 + rhee, data = sepsis_comp, addNA = T)
 xtabs(~ sepsis_code_adm + rhee, data = sepsis_comp, addNA = T)
 xtabs(~ sepsis_code_w1d + rhee, data = sepsis_comp, addNA = T)
 xtabs(~ sepsis_code_adm + sepsis3, data = sepsis_comp, addNA = T)
-xtabs(~ sepsis_code_adm + sepsis3, data = sepsis_comp, addNA = T)
+xtabs(~ sepsis_code_w1d + sepsis3, data = sepsis_comp, addNA = T)
 sepsis_comp %>% 
   filter(rhee_infection == 1) %>% 
   with(xtabs(~sepsis3 + rhee))
-
 sepsis_comp %>% filter(rhee == 1, sepsis3 == 0) %>% count(data_type)
-write_csv(sepsis_comp, "../output/sepsis_compare_20191203.csv")
+
+write_csv(sepsis_comp, "../output/sepsis_compare_20191217.csv")
 ## All rhee infections are sepsis3 infections
 
 #. Get distinct GRID ---------------------
