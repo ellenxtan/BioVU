@@ -1,4 +1,9 @@
 # Identify suspected infection 
+library(tidyverse)
+library(readxl)
+library(magrittr)
+library(lubridate)
+
 
 changed_grid <- read_csv("../output/changed_grid_dob_20190924.csv")
 cam_visits <- read_csv("../output/cam_stay_20190925.csv") 

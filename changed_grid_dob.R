@@ -178,3 +178,42 @@ changed_grid_dob %>%
 write_csv(changed_grid_dob, "../output/changed_grid_dob_20190924.csv")
 
 
+#. compare GRID in genotype_status vs. demo -----------------------
+genotype_status <- read_excel("../../Mito Delirium BioVU Data/Demographics/Sample_Genotyping_Status.xlsx")
+names(genotype_status) <- str_to_lower(names(genotype_status))
+## check the data with problematic date
+genotype_status %>% 
+  slice(24823:24826) %>% 
+  select(grid, dob)
+genotype_status %<>% 
+  mutate(dob = if_else(is.na(dob), ymd(18990412), as_date(dob)))
+
+sum(genotype_status$grid %in% demo_raw$grid) # All in demo_raw
+sum(genotype_status$grid %in% static_raw$grid) # All in static_raw
+sum(genotype_status$grid %in% (demo_raw %>% filter(!is.na(primary_grid)) %>% pull(grid)))
+
+
+#. compare DOB in demo vs. genotype_status -----------------------
+grid_dob_prob1 <- demo_raw %>% 
+  select(grid, dob) %>% 
+  inner_join(
+    genotype_status %>% 
+      select(grid, dob),
+    by = "grid") %>% 
+  filter(dob.x != dob.y) %>% 
+  mutate(diff = dob.x - dob.y) %>% 
+  arrange(grid) %>% 
+  print(n = 30)
+
+all.equal(grid_dob_prob, grid_dob_prob1)
+
+static_raw %>% 
+  select(grid, dob) %>% 
+  inner_join(
+    genotype_status %>% 
+      select(grid, dob),
+    by = "grid") %>% 
+  filter(dob.x != dob.y)
+
+## The new genotype_status had the same DOB as static raw, so will just ignore DOB discrepancy in demo.
+

@@ -1,0 +1,280 @@
+---
+title: "Identify Sepsis"
+author: "Fei Ding"
+date: "December 19, 2019"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    
+---
+
+
+
+
+```{r setup, include = FALSE}
+library(tidyverse)
+library(readxl)
+library(scales)
+library(kableExtra)
+library(VennDiagram)
+library(magrittr)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+
+#sepsis3 <- read_csv("../output/sepsis3_20191014.csv")
+#rhee_sepsis <- read_csv("../output/sepsis_rhee_20191203.csv")
+sepsis_comp <- read_csv("../output/sepsis_compare_20191217.csv")
+sepsis_grid <- read_excel("../output/sepsis_grids_20191218.xlsx", sheet = 1)
+all_grid <- read_excel("../output/sepsis_grids_20191218.xlsx", sheet = "All GRIDs")
+
+```
+
+# Update from last report
+1. Use Rhee definition OR Sepsis Code within $\pm1$ day of hospital admission to identify sepsis.
+2. For Rhee definition, limit ICD9 code for end-stage kidney disease within the $\pm2$ day window of blood culture day.
+3. Get unique GRIDs and their genotyping status.
+4. No longer removing DOB discrepancy patients.
+    * Since DOBs in the new _Demographics/Sample_Genotyping_Status.xlsx_ file are consistent with those in _Data/Samuels_Delirium_STATIC_20180718.csv_, and DOB discrepancy was only found in _Demogrpahics/Set_X_20180830_demo.txt_ file, we would no longer remove DOB discrepancy patients.
+
+
+
+
+# Rhee definition
+
+**NOTE:** Deviation from original definition were **bold (need more discussion)** or _italic (decided deviation)_.
+
+1. For each CAM-ICU encounter, identify presumed serious infection .
+    * Blood culture (BC) obtained _within $\pm1$ day of hopital admission date_, AND
+    * $\ge 4$ QADs starting within $\pm2$ day of BC day.
+        * __First QAD should be no later than discharge date, but no such limit for subsequent QADs__.
+        * First QAD is the first day that patient receives a new antibiotic, which is not given in the prior 2 calendar days.
+            * PO and IV/IM formulations of the same antibiotic are considered the same antibiotic EXCEPT for vacomycin. 
+        * Subsequent QADs can be the same antibiotic, or different anitibiotics as long as the first dose of each antibiotic in the sequence is new.
+            * A gap of a single calendar day between the same antibiotic count as QADs.
+        * If the paitent died before 4 QADs, the paitent can still qualify for presumed infection as long as they have consecutive QADs until 1 day prior to death. 
+        * There must be at least one new IV/IM antibiotic within the $\pm2$ day window of BC day.
+2. For each presumed infection, if any of the acute organ dysfunction criteria was met within the $\pm2$ day window of BC day, it is a sepsis.
+    * Vasopressor initiation (norepinephrine, dopamine, epinephrine, phenylephrine, or vasopressin)
+        * note only IV were included following Rhee paper (page 23 in supplementary)
+    * Initiation of mechanical ventilation
+    * Doubling in creatinine level or decrease by $\ge50\%$ decline eGFR relative to baseline (excluding patients with ICD code for end-stage kidney disease).
+        * eGFR was calcualted based on CKD-EPI equation in Table 1 on this [webpage](https://www.niddk.nih.gov/health-information/communication-programs/nkdep/laboratory-evaluation/glomerular-filtration-rate/estimating)
+        * _An admission was considered end-stage kidney disease thus excluded only if there is an ESRD code within the $\pm2$ day window of BC day._
+        * Race were dichotomized as Black vs. White and others. 
+            * U is treated as missing.
+            * _When a GRID has conflicting races, if any of the recorded race include "B", this patient is considered Black._
+        * Note that eGFR > 60 was set to 60 following Rhee's paper.
+    * Bilirubin level $\ge2.0$ mg/dL and doubling from baseline
+    * Platelet count < 100x$10^3/\mu L$ and $\ge50\%$ decline from baseline (baseline must be < 100x$10^3/\mu L$) 
+    * Lactate $\ge2.0$ mmol/L
+    * Note
+        * vasopressor and ventilation initiation if there were no vasopressors or mechanical ventilation admnistered on the prior calendar day
+        * Since we limited BC day within $\pm1$ day of hopital admission date, all of our infections are "present-on-admission infection".  Baseline lab values were the best value during hospitalization, from 3 days before admission date to discharge date.
+
+
+# Sepsis-3 definition
+
+1. For each CAM-ICU encounter, identify the first episode of suspected infection _within $\pm1$ day of hopital admission date_.
+    * If the antibiotic was given first, the culture sampling must have been obtained within 1 day.
+    * If the culture sampling was first, the antibiotic must have been ordered within 3 days.
+    * The onset date of infection was the date on which the first of these two events occured.
+    * __We used only blood culutre instead of body fluid cultures (blood, urine, cerebrospinal fluid, etc)__.
+2. For each suspected infection, find worst daily SOFA score for the time window from 2 day before to 1 day after the onset date of infection.
+    * Central nervous system SOFA score calculated _based on RASS Method C in the Modified SOFA score paper_.  
+    * Respiration SOFA score calculated using both PaO~2~/FiO~2~(PF) ratio _and SpO~2~/FiO~2~(SF) ratio_.
+        * FiO~2~ values > 100 were excluded. 1 < FiO~2~ <= 100 were converted to 0-1. 
+        * SpO~2~ values > 100 were converted to 100.
+    * __We used only creatinine data for renal SOFA, no urine output data__.
+    * __For vasopressor, there is a footnote "Catecholamine doses are given as $\mu g/kg/min$ for at least 1 hour", do we need to limit vasopressor to IV only (except dobutamine)?__
+    * Note
+        * All the lab/drug dates are from 3 days before admission date to discharge date. 
+        * All non-numerical lab values were converted to upper/lower limit or mean of the range.  
+   
+    
+|SOFA score|PF or SF ratio and Ventilation | Platelets, x$10^3/\mu L$| Bilirubin, mg/dL| Cardiovascular| Rass score | Creatinine, mg/dL |
+--|-------------------------------------|----------|-----------|----------------------------------|--------------|---|----|
+0 | PF $\ge$ 400 or SF $\ge$ 512          | $\ge$ 150 | <1.2     | MAP $\ge$ 70 mmHg                  |$\ge$ 0   | <1.2    |  
+1 | PF < 400 or SF < 512                  | <150     | 1.2-1.9  | MAP < 70 mmHg                     | -1       | 1.2-1.9 |
+2 | PF < 300 or SF < 357                  | <100     | 2.0-5.9  | any dopamine or dubutamine        | -2       | 2.0-3.4 |
+3 | PF < 200 or SF < 214 with ventilation | <50      | 6.0-11.9 | any epinephrine or norepinephrine | -3       | 3.5-4.9 |
+4 | PF < 100 or SF < 89 with ventilation  | <20      | >12.0    |                                   | -4 to -5 | >5.0    |
+
+3. Suspected infection with a SOFA score $\ge2$ is considered sepsis __assuming baseline SOFA score is zero__.
+
+
+
+
+# Compare two definitions with sepsis code
+Out of `r comma(nrow(sepsis_comp))` ICU encounters with CAM-ICU assessments, 
+
+* Using __Rhee__ definition
+    * `r paste0(comma(sum(sepsis_comp$rhee_infection == 1)), " (", percent(sum(sepsis_comp$rhee_infection == 1)/nrow(sepsis_comp)), ")")` had presumed infections
+    * __`r paste0(comma(sum(sepsis_comp$rhee == 1)), " (", percent(sum(sepsis_comp$rhee == 1)/sum(sepsis_comp$rhee_infection == 1)), ")")`__ of presumed infections had acute organ dysfunction.  
+    * Overall, __`r percent(sum(sepsis_comp$rhee == 1)/nrow(sepsis_comp))`__ ICU encounters had sepsis, that is __`r comma(sepsis_comp %>% filter(rhee == 1) %>% distinct(grid) %>% nrow())`__ distinct patients.
+* Using __Sepsis-3__ definition
+    * `r paste0(comma(sum(sepsis_comp$sepsis3_infection == 1)), " (", percent(sum(sepsis_comp$sepsis3_infection == 1)/nrow(sepsis_comp)), ")")` had suspected infections
+    * __`r paste0(comma(sum(sepsis_comp$sepsis3 == 1)), " (", percent(sum(sepsis_comp$sepsis3 == 1)/sum(sepsis_comp$sepsis3_infection == 1)), ")")`__ of suspected infections had a SOFA score $\ge 2$.  
+    * Overall, __`r percent(sum(sepsis_comp$sepsis3 == 1)/nrow(sepsis_comp))`__ ICU encounters had sepsis, that is __`r comma(sepsis_comp %>% filter(sepsis3 == 1) %>% distinct(grid) %>% nrow())`__ distinct patients.  
+* Using __Sepsis code__
+    * __`r comma(sum(sepsis_comp$sepsis_code_w1d == 1))`__ ICU encounters had sepsis code within $\pm1$ day of hopital admission date, that is __`r comma(sepsis_comp %>% filter(sepsis_code_w1d == 1) %>% distinct(grid) %>% nrow())`__ patients
+* Using __Rhee or sepsis code__
+    *  __`r paste0(comma(sepsis_comp %>% filter(rhee == 1 | sepsis_code_w1d == 1) %>% nrow()), " (", percent(sepsis_comp %>% filter(rhee == 1| sepsis_code_w1d == 1) %>% nrow()/nrow(sepsis_comp)), ")")`__ ICU encounters had sepsis, that is __`r comma(nrow(sepsis_grid))`__ distinct patients. 
+
+
+
+
+## Rhee vs. Sepsis code at Encounter level
+```{r}
+sensitivity <- sepsis_comp %>% filter(rhee == 1, sepsis_code_w1d == 1) %>% nrow() / 
+  sepsis_comp %>% filter(sepsis_code_w1d == 1) %>% nrow()
+specificity <- sepsis_comp %>% filter(rhee == 0, sepsis_code_w1d == 0) %>% nrow() / 
+  sepsis_comp %>% filter(sepsis_code_w1d == 0) %>% nrow()
+```
+
+
+Sensitivity and specificity of Rhee definition are `r percent(sensitivity)` and `r percent(specificity)` respectively.  
+```{r}
+xtabs(~ rhee + sepsis_code_w1d, data = sepsis_comp, addNA = T)
+grid.newpage()
+venn.plot <- draw.pairwise.venn(area1      = sepsis_comp %>% filter(sepsis_code_w1d == 1) %>% nrow(),
+                                area2      = sepsis_comp %>% filter(rhee == 1) %>% nrow(),
+                                cross.area = sepsis_comp %>% filter(rhee == 1, sepsis_code_w1d == 1) %>% nrow(),
+                                category   = c("Sepsis code", "Rhee"),
+                                fill = c("blue", "red"),
+                                lty = "blank"
+                                )
+
+```
+
+
+## Rhee vs. Sepsis-3 vs. Sepsis code at Encounter level
+```{r}
+grid.newpage()
+venn.plot <- draw.triple.venn(area1      = sepsis_comp %>% filter(sepsis_code_w1d == 1) %>% nrow(),
+                                area2      = sepsis_comp %>% filter(sepsis3 == 1) %>% nrow(),
+                                area3      = sepsis_comp %>% filter(rhee == 1) %>% nrow(),
+                              n12 = sepsis_comp %>% filter(sepsis3 == 1, sepsis_code_w1d == 1) %>% nrow(),
+                              n23 = sepsis_comp %>% filter(rhee == 1, sepsis3 == 1) %>% nrow(),
+                              n13 = sepsis_comp %>% filter(rhee == 1, sepsis_code_w1d == 1) %>% nrow(),
+                                n123 = sepsis_comp %>% filter(rhee == 1, sepsis3 == 1, sepsis_code_w1d == 1) %>% nrow(),
+                                category   = c("Sepsis code", "Sepsis-3", "Rhee"),
+                                fill = c("green", "blue", "red"),
+                                lty = "blank"
+                                )
+
+```
+
+### Check sepsis code only encounters
+Of the `r sepsis_comp %>% filter(sepsis_code_w1d == 1, sepsis3 != 1, rhee != 1) %>% nrow()` ICU encounters with Sepsis code but not identified as sepsis by either Sepsis-3 or Rhee definition
+
+* `r sepsis_comp %>% filter(sepsis_code_w1d == 1, sepsis3_infection != 1, rhee_infection != 1) %>% nrow()` were not identified as infection by either definition. 
+    * 2633 of these encounters had antibiotic administration during hospital stay.
+    * 1079 of these encounters had antibiotic administration within the $\pm2$ day window of sepsis code date.
+    * I checked a few encounters, sepsis code date is the admissiond date, however, the first antibiotic was 4-7 days after the admission date.
+* The other `r sepsis_comp %>% filter(sepsis_code_w1d == 1, sepsis3 != 1, rhee != 1, sepsis3_infection == 1) %>% nrow()` had sepsis-3 infection, but SOFA < 2 due to missing data.  
+    * Of the `r sepsis_comp %>% filter(sepsis_code_w1d == 1, sepsis3 != 1, rhee != 1, sepsis3_infection == 1) %>% nrow()` encounters, `r sepsis_comp %>% filter(sepsis_code_w1d == 1, sepsis3 != 1, rhee != 1, sepsis3_infection == 1, rhee_infection == 1) %>% nrow()` also had Rhee infection, but they did not meet Rhee's acute organ dysfunction criteria either.
+```{r}
+## check sepsis-code positive other negative 
+sepsis_comp %>% 
+  filter(sepsis_code_w1d == 1, sepsis3 != 1, rhee != 1) %>% 
+  count(sepsis3_infection, rhee_infection) %>% 
+  kable(caption = "Infections in Sepsis code only encounters") %>% 
+  kable_styling("condensed", full_width = F)
+sepsis_comp %>% 
+  filter(sepsis_code_w1d == 1, sepsis3 != 1, rhee != 1, sepsis3_infection == 1) %>% 
+  count(data_type) %>% 
+  kable(caption = "Missing in 341 encounters with sepsis code and sepsis-3 infection") %>% 
+  kable_styling("condensed", full_width = F)
+```
+
+## Rhee vs. Sepsis code at patient level
+```{r}
+all_grid %>% 
+  mutate(rhee = if_else(n_rhee > 0 , 1, 0),
+         sepsis_code = if_else(n_sepsis_code > 0, 1, 0),
+         sepsis3 = if_else(n_sepsis3 > 0, 1, 0)
+  ) %>% 
+  with(., xtabs(~ rhee + sepsis_code, addNA = T))
+grid.newpage()
+venn.plot <- draw.pairwise.venn(area1      = all_grid %>% filter(n_sepsis_code > 0) %>% nrow(),
+                                area2      = all_grid %>% filter(n_rhee > 0) %>% nrow(),
+                                cross.area = all_grid %>% filter(n_sepsis_code > 0, n_rhee > 0) %>% nrow(),
+                                category   = c("Sepsis code", "Rhee"),
+                                fill = c("blue", "red"),
+                                lty = "blank"
+                                )
+
+```
+
+## Rhee vs. Sepsis-3 vs. Sepsis code at patient level
+```{r}
+grid.newpage()
+venn.plot <- draw.triple.venn(area1      = all_grid %>% filter(n_sepsis_code > 0) %>% nrow(),
+                                area2      = all_grid %>% filter(n_sepsis3 > 0) %>% nrow(),
+                                area3      = all_grid %>% filter(n_rhee > 0) %>% nrow(),
+                              n12 = all_grid %>% filter(n_sepsis3 > 0, n_sepsis_code > 0) %>% nrow(),
+                              n23 = all_grid %>% filter(n_rhee > 0, n_sepsis3 > 0) %>% nrow(),
+                              n13 = all_grid %>% filter(n_rhee > 0, n_sepsis_code > 0) %>% nrow(),
+                                n123 = all_grid %>% filter(n_rhee > 0, n_sepsis3 > 0, n_sepsis_code > 0) %>% nrow(),
+                                category   = c("Sepsis code", "Sepsis-3", "Rhee"),
+                                fill = c("green", "blue", "red"),
+                                lty = "blank"
+                                )
+
+```
+
+
+
+# Unique GRIDs and genotyping status
+* In our cohort, there are __`r comma(nrow(all_grid))`__ distinct patients total, __`r paste0(comma(nrow(sepsis_grid)), " (", percent(nrow(sepsis_grid)/nrow(all_grid)), ")")`__ had at least one ICU encounter with sepsis using Rhee definition or Sepsis code.
+* Note that __`r all_grid %>% filter(is.na(category)) %>% nrow()`__ GRIDs don't have genotyping status, of which __`r all_grid %>% filter(is.na(category), sepsis == "Rhee or Sepsis code") %>% nrow()`__ had sepsis.
+* Lists of distinct GRIDs were provided in _Output/sepsis_grids_20191218.xlsx_ for Sepsis paitents (Rhee definition or Sepsis code) and all patients in the cohort.
+```{r}
+all_grid %>% 
+  with(., addmargins(xtabs( ~ category + sepsis, addNA = T))) %>% 
+  kable(caption = "Sepsis vs. Genotyping at patient level") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width =  F) %>% 
+  column_spec(5, bold = T) %>% 
+  column_spec(1, bold = T, color = "black") %>% 
+  column_spec(3,  background = "#F0E442") %>% 
+  row_spec(9, bold = T)
+```
+
+## Sepsis patients list 
+
+* All the patients in this list had sepsis by Rhee definition or Sepsis code
+* _rhee, sepsis_code, sepsis3_ indicates which critiria the patient met.
+```{r}
+sepsis_grid %>% 
+  slice(1:5)
+```
+
+## All patients list 
+* _n_cam_icu_encounter_ is total # of CAM-ICU encounters for that patient
+* _n_rhee, n_sepsis_code, and n_sepsis3_ are the # of sepsis CAM-ICU encounters identified using Rhee definition, Sepsis code, and Sepsis-3 definition, respectivley.
+* _sepsis_ had three categories: 
+    * Rhee or Sepsis code: at least one of the encounter of the patient was identified as sepsis by Rhee definition or sepsis code.
+    * Sepsis-3 only: None of the paitent's encounters were identified as sepsis by Rhee definition or sepsis code, but at least one encounter met the Sepsis-3 definition.
+    * No Sepsis.
+
+```{r}
+all_grid %>% 
+  slice(1:5)
+```
+
+
+# Lab value range
+* Creatinine
+    * Some really big creatinine values > 20 mg/dL
+    * 825 presumed infection had small baseline creatinine, even it's doubled it's still < 1.2, but this will satisfy Rhee definition of sepsis.
+* A couple of bilirubin values > 50 mg/dL
+* 17 presumed infection had baseline platelet count > 1000x$10^3/\mu L$
+* FiO2 value < 21%
+    * only 4% of the FiO2 < 21% had a matching Nasal O2 value.
+    * If we find a way to utilize Nasal O2 data, it can add respiration data to ~900 ICU encouters. 
+    * About 40 suspected infections had maximum FiO2 value < 21.
