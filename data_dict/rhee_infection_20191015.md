@@ -2,6 +2,6 @@
 * Each row is a unique combination of __grid, adm_id, blood_date__, NOT a unique encounter.
 * Fields
   * __grid__
-  * __adm_id__
-  * __adm_date, dc_date__
+  * __adm_id__ - admission/encounter ID
+  * __adm_date, dc_date__ - admission and discharge date
   * __blood_date__ - blood culture day
