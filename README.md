@@ -6,15 +6,8 @@ The goal of the project is to study the association between mtDNA haplogroups an
 3. Identify encounters with sepsis.
 
 ## Step 1 & 2. Determine daily status and identify CAM-ICU encounters
-### Code:
-* [reconstruct_daily_visit_data.R](https://https://github.com/meerkatR/BioVU/blob/master/reconstruct_daily_visit_data.R)  
-### Report:
-Refer to these reports for general ideas and more details. However, note that none of them correct for changed GRIDs.
-* _Girard_BioVU/code/no_git/20190619_cam_gap.html_ 
-* _Girard_BioVU/code/no_git/20190319_daily_status.html_
-* _Girard_BioVU/code/no_git/20190716_visit_summary.html_
-### What:
-1. Clean and combine CAM-ICU data and RASS data, resolve discrepancy
+The code [reconstruct_daily_visit_data.R](https://https://github.com/meerkatR/BioVU/blob/master/reconstruct_daily_visit_data.R) does the following: 
+1. Clean and combine CAM-ICU data and RASS data, resolves discrepancy
     * CAM-ICU is a tool to detect delirium in ICU patients, usually assesed every 8 hours in ICU. Valid CAM-ICU values:   
       * Positive - Delirium present
       * Negative - No deliruim
@@ -48,6 +41,11 @@ Refer to these reports for general ideas and more details. However, note that no
    * Data used for correct GRIDs and dates
    * Produced by Girard_BioVU/code/changed_grid_dob.R
    * find total # of days in hospital, total # of days with CAM-ICU (to be accurate, known daily status, including Comatose, Delirious, Normal), first and last CAM-ICU and # of days inbetween, total # of com/delirium/normal
+### Report:
+Refer to these reports for general ideas and more details. However, note that none of them correct for changed GRIDs.
+* _Girard_BioVU/code/no_git/20190619_cam_gap.html_ 
+* _Girard_BioVU/code/no_git/20190319_daily_status.html_
+* _Girard_BioVU/code/no_git/20190716_visit_summary.html_
 
 ## Step 3. Identify sepsis
 There are three ways to identify sepsis.
@@ -81,16 +79,21 @@ There are three ways to identify sepsis.
    * __Output Data:__ _Girard_BioVU/output/sepsis3_20191014.csv_
 
 ### Compare three criteria
-The code [compare_sepsis.R](https://github.com/meerkatR/BioVU/blob/master/compare_sepsis.R)
-1. Compares three criteria at encounter level.
+The code [compare_sepsis.R](https://github.com/meerkatR/BioVU/blob/master/compare_sepsis.R) does the following:
+1. Compare three criteria at encounter level.
    * __Output Data:__ _Girard_BioVU/output/sepsis_compare_20191217.csv_
-2. Finds distinct GRIDs with sepsis and see which ones have genotype data
+2. Find distinct GRIDs with sepsis and see which ones have genotype data
    * __Output Data:__ 
       * _Girard_BioVU/output/grid_not_in_genotype_status_20200106.csv_
       * _Girard_BioVU/output/sepsis_grids_20200106.xlsx_
-3. Checks the encounters with sepsis code but negative for both sepsis definitions
+3. Check the encounters with sepsis code but negative for both sepsis definitions
+4. We Decide to use Rhee definition only to identify sepsis for now.
 
-
+### Report
+* _Girard_BioVU/code/20191120_sepsis_compare.html
+   * Having missing data summary for Sepsis-3 definition.
+* _Girard_BioVU/code/20200106_sepsis_compare.html
+   * Most current version of comparing three criteria.
 
 ## Misc.
 ### Changed GRIDs
@@ -100,7 +103,7 @@ The code [compare_sepsis.R](https://github.com/meerkatR/BioVU/blob/master/compar
       * static_raw had all GRIDs in old EHR system and DOB.
    * _Mito Delirium BioVU Data/Data/Changed_GRIDS.xlsx_ 
       * Old and updated GRIDs only, no DOB.
-   * _Mito Delirium BioVU Data/Demographics/Set_*_20180830_demo.txt_
+   * _Mito Delirium BioVU Data/Demographics/Set\_*\_20180830_demo.txt_
       * GRID, primary GRID (if GRID was old and changed), and DOB for all GRIDs.
       * DOB discrepancy between this file and the other two sources.
    * _Mito Delirium BioVU Data/Demographics/Sample_Genotyping_Status.xlsx_
@@ -135,5 +138,5 @@ The code [check_sepsis_discrepancy.R](https://github.com/meerkatR/BioVU/blob/mas
 
 ### Check patient location
 The code [check_pt_loc.R](https://github.com/meerkatR/BioVU/blob/master/check_pt_loc.R) tabulates patient location datato see whether it will help to identify whether they were in ICU. Decide not to use for now. 
-* __Input Data:__ _Mito Delirium BioVU Data/Lab values/patient_Location/Set_*_location.xlsx_ 
+* __Input Data:__ _Mito Delirium BioVU Data/Lab values/patient_Location/*.xlsx_ 
 * __Output Data:__ _Girard_BioVU/output/patient_cam_visit_location_count.csv_
