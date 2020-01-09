@@ -6,7 +6,7 @@ The goal of the project is to study the association between mtDNA haplogroups an
 3. Identify encounters with sepsis.
 
 ## Step 1 & 2. Determine daily status and identify CAM-ICU encounters
-The code [reconstruct_daily_visit_data.R](https://https://github.com/meerkatR/BioVU/blob/master/reconstruct_daily_visit_data.R) does the following: 
+The code [reconstruct_daily_visit_data.R](https://github.com/meerkatR/BioVU/blob/master/reconstruct_daily_visit_data.R) does the following: 
 1. Clean and combine CAM-ICU data and RASS data, resolves discrepancy
     * CAM-ICU is a tool to detect delirium in ICU patients, usually assesed every 8 hours in ICU. Valid CAM-ICU values:   
       * Positive - Delirium present
@@ -90,9 +90,9 @@ The code [compare_sepsis.R](https://github.com/meerkatR/BioVU/blob/master/compar
 4. We Decide to use Rhee definition only to identify sepsis for now.
 
 ### Report
-* _Girard_BioVU/code/20191120_sepsis_compare.html
+* _Girard_BioVU/code/20191120_sepsis_compare.html_
    * Having missing data summary for Sepsis-3 definition.
-* _Girard_BioVU/code/20200106_sepsis_compare.html
+* _Girard_BioVU/code/20200106_sepsis_compare.html_
    * Most current version of comparing three criteria.
 
 ## Misc.
