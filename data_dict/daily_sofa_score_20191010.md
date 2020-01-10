@@ -13,7 +13,7 @@
   * __vent__ - 1 if mechnical ventional was used on this day
   * __sofa_liver, sova_renal, sofa_coagulation, sofa_cns, sofa_cardio, sofa_respiration__ - SOFA score for 6 organ systems.
   * __sofa__ - sum of non-missing SOFA scores of 6 organ systems.
-  * __data_type__ - SOFA score missing/completion
+  * __data_type__ - SOFA score missing status
     * Complete data - all SOFA scores for 6 organ systems are available for that day
     * All missing - all SOFA scores for 6 organ systems are missing for that day
     * Missing > 1 system - SOFA scores of more than 1 organ system is missing.
