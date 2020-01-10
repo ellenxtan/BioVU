@@ -97,9 +97,9 @@ write_csv(sepsis_comp, "../output/sepsis_compare_20191217.csv")
 
 
 #. Get distinct GRIDs and their genotype status ---------------------------------
-#> GRIDs with either Rhee or sepsis code.
-rhee_code_grid <- sepsis_comp %>% 
-  filter(rhee == 1 | sepsis_code_w1d == 1) %>% 
+#> GRIDs with Rhee sepsis.
+rhee_grid <- sepsis_comp %>% 
+  filter(rhee == 1) %>% 
   group_by(grid) %>% 
   summarise(
     rhee = if_else(sum(rhee) > 0, 1, 0),
@@ -133,13 +133,13 @@ sepsis_comp %>% distinct(grid)
 grid_not_in_genotype <- sepsis_comp %>% 
   distinct(grid) %>% 
   anti_join(genotype_status, by = "grid") %>% 
-  left_join(rhee_code_grid, by = "grid") %>% 
-  mutate(sepsis = if_else(!is.na(rhee) , 1, 0)) %>% 
-  select(grid, sepsis)
+  left_join(rhee_grid, by = "grid") %>% 
+  mutate(rhee_sepsis = if_else(!is.na(rhee) , 1, 0)) %>% 
+  select(grid, rhee_sepsis)
 grid_not_in_genotype %>% 
-  count(sepsis)
+  count(rhee_sepsis)
 
-write_csv(grid_not_in_genotype, "../output/grid_not_in_genotype_status.csv")
+write_csv(grid_not_in_genotype, "../output/grid_not_in_genotype_status_20200106.csv")
  
 # check other variables
 genotype_status %>% 
@@ -157,7 +157,7 @@ with(genotype_status, xtabs(~ `have haplogroup` + `in biovu`)) # samples can hav
 with(genotype_status, xtabs(~ `compromised blood sample` + `in biovu`)) # samples not in BioVU don't have the status of compromised blood sample
 
 #> get genotype status for each grid -----------------
-rhee_code_grid %<>% 
+rhee_grid %<>% 
   left_join(genotype_status, by = "grid")
 all_grid <- sepsis_comp %>% 
   group_by(grid) %>% 
@@ -168,22 +168,23 @@ all_grid <- sepsis_comp %>%
     n_sepsis3 = sum(sepsis3)) %>% 
   mutate(
     sepsis = case_when(
-      n_rhee > 0 | n_sepsis_code > 0 ~ "Rhee or Sepsis code",
-      n_sepsis3 > 0 ~ "Sepsis-3 only",
+      n_rhee > 0  ~ "Rhee",
+      n_sepsis3 > 0 ~ "Sepsis-3 but not Rhee",
+      n_sepsis_code > 0 ~ "Sepsis code only",
       n_rhee == 0 & n_sepsis_code == 0 & n_sepsis3 == 0 ~ "No Sepsis")
     ) %>% 
   left_join(genotype_status, by = "grid")
 
-rhee_code_grid %>% Hmisc::describe()
+rhee_grid %>% Hmisc::describe()
 all_grid %>% Hmisc::describe()
 
-rhee_code_grid %>% count(category)
+rhee_grid %>% count(category)
 all_grid %>% count(category)
 with(all_grid, addmargins(xtabs( ~ category + sepsis, addNA = T)))
 
-openxlsx::write.xlsx(list(rhee_code_grid, all_grid),
-                     file = "../output/sepsis_grids_20191218.xlsx",
-                     sheetName = c("Sepsis GRIDs (Rhee or code)", "All GRIDs"))
+openxlsx::write.xlsx(list(rhee_grid, all_grid),
+                     file = "../output/sepsis_grids_20200106.xlsx",
+                     sheetName = c("Rhee Sepsis GRIDs", "All GRIDs"))
 
 
 
