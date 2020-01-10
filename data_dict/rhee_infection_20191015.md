@@ -1,5 +1,6 @@
 * Produced by [rhee_infection.R](https://github.com/meerkatR/BioVU/blob/master/rhee_infection.R)
-* Each row is a unique combination of __grid, adm_id, blood_date__, NOT a unique encounter.
+* Infection episode level
+  * Note that each row/infection episode is unique identified by the combination of __grid, adm_id, blood_date__, it is NOT a unique encounter.
 * Fields
   * __grid__
   * __adm_id__ - admission/encounter ID
