@@ -5,6 +5,14 @@ The goal of the project is to study the association between mtDNA haplogroups an
 2. Identify hospital encounters with at least one CAM-ICU assessments.
 3. Identify encounters with sepsis.
 
+## Table of Contents  
+* [Step 1 & 2. Determine daily status and identify CAM-ICU encounters](https://github.com/meerkatR/BioVU/blob/master/README.md#step-1--2-determine-daily-status-and-identify-cam-icu-encounters)  
+* [Step 3. Identify sepsis](https://github.com/meerkatR/BioVU/blob/master/README.md#step-3-identify-sepsis)  
+* [Misc.](https://github.com/meerkatR/BioVU/blob/master/README.md#misc)
+* [Data Dictionary](https://github.com/meerkatR/BioVU/blob/master/README.md#data-dictionary)
+
+
+
 ## Step 1 & 2. Determine daily status and identify CAM-ICU encounters
 The code [reconstruct_daily_visit_data.R](https://github.com/meerkatR/BioVU/blob/master/reconstruct_daily_visit_data.R) does the following: 
 1. Clean and combine CAM-ICU data and RASS data, resolves discrepancy
@@ -30,17 +38,16 @@ The code [reconstruct_daily_visit_data.R](https://github.com/meerkatR/BioVU/blob
       * For each admission/discharge record, find all dates from admission date to discharge dates.
       * Merge with daily status obtained above (keep Comatose, Delirious, Normal only) and redefine admission/discharge dates
          * Consecutive dates were considered as one encounter, and the first/last dates of the group of consectuvie dates were taken as admission/discharge dates.
-         * The reason we did all this was because 1) some admission/discharge record did not have a discharge date 2) around 20,000 hospital dates with daily status did not fall into any of the admission/discharge records and we do not want to throw them away. 
+         * The reason we did all this was because:
+            1. some admission/discharge record did not have a discharge date. 
+            2. around 20,000 hospital dates with daily status did not fall into any of the admission/discharge records and we do not want to throw them away. 
       * Calculate a few summary statistics at encounter level and remove encounters without any CAM-ICU.  
       * __Output Data:__ _Girard_BioVU/output/cam_stay_20190925.csv_
 ### Input data: 
 * _Girard_BioVU/output/data_raw.RData_
    * Including admission/discharge data, CAM data, and RASS data
-   * Produced by Girard_BioVU/code/no_git/20181211_import_data.R
 * _Girard_BioVU/output/changed_grid_dob_20190924.csv_  
    * Data used for correct GRIDs and dates
-   * Produced by Girard_BioVU/code/changed_grid_dob.R
-   * find total # of days in hospital, total # of days with CAM-ICU (to be accurate, known daily status, including Comatose, Delirious, Normal), first and last CAM-ICU and # of days inbetween, total # of com/delirium/normal
 ### Report:
 Refer to these reports for general ideas and more details. However, note that none of them correct for changed GRIDs.
 * _Girard_BioVU/code/no_git/20190619_cam_gap.html_ 
@@ -97,7 +104,10 @@ The code [compare_sepsis.R](https://github.com/meerkatR/BioVU/blob/master/compar
 
 ## Misc.
 ### Changed GRIDs
-2000+ GRIDs were changed due to EHR system switching.  Since the dates were shifted by different amount for each GRID, not only the GRIDs but also the dates need to be corrected.  The code [changed_grid_dob.R](https://github.com/meerkatR/BioVU/blob/master/changed_grid_dob.R) outputs the DOBs for old and updated GRIDs.  When correcting for changed GRIDs, all the dates should be converted using date - old_dob + updated_dob.  Technically, only the older data had the changed GRIDs problem, however, I recommend __always__ check for old GRIDs for any data used.
+2000+ GRIDs were changed due to EHR system switching.  Since the dates were shifted by different amount for each GRID, not only the GRIDs but also the dates need to be corrected.  The code [changed_grid_dob.R](https://github.com/meerkatR/BioVU/blob/master/changed_grid_dob.R) outputs the DOBs for old and updated GRIDs.  
+Supposedly, only the older data had the changed GRIDs problem.  However, I recommend __always__ check whether old GRIDs exist in any data used, adn follow the following two steps if old GRIDs do exist.
+  1. Convert the old GRIDs to updated GRIDs.
+  2. Convert all dates of the old GRIDs by __date - old_dob + updated_dob__.
 * __Input Data:__
    * _Girard_BioVU/output/data_raw.RData_
       * static_raw had all GRIDs in old EHR system and DOB.
@@ -140,3 +150,6 @@ The code [check_sepsis_discrepancy.R](https://github.com/meerkatR/BioVU/blob/mas
 The code [check_pt_loc.R](https://github.com/meerkatR/BioVU/blob/master/check_pt_loc.R) tabulates patient location datato see whether it will help to identify whether they were in ICU. Decide not to use for now. 
 * __Input Data:__ _Mito Delirium BioVU Data/Lab values/patient_Location/*.xlsx_ 
 * __Output Data:__ _Girard_BioVU/output/patient_cam_visit_location_count.csv_
+
+## Data Dictionary
+Data dictionary can be found in the [data_dict](https://github.com/meerkatR/BioVU/tree/master/data_dict) folder for currently in-use output data.  They have the same name as the output data.
