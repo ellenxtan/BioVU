@@ -1,0 +1,123 @@
+---
+title: "Data of updated GRIDs"
+author: "Fei Ding"
+date: "August 21, 2019"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r setup, include = FALSE}
+library(tidyverse)
+library(readxl)
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+
+load("../output/data_raw.RData")
+changed_grid <- read_excel("../../Mito Delirium BioVU Data/Data/Changed_GRIDS.xlsx")
+Hmisc::describe(changed_grid)
+changed_grid <- distinct(changed_grid)
+names(changed_grid) <- tolower(names(changed_grid))
+Hmisc::describe(changed_grid)
+
+## see how many duplicated data
+length(unique(static_raw$grid))
+sum(unique(static_raw$grid) %in% unique(changed_grid$old_grid))
+sum(unique(static_raw$grid) %in% unique(changed_grid$updated_grid))
+
+length(unique(discharge_raw$grid))
+sum(discharge_raw$grid %in% changed_grid$updated_grid)
+sum(unique(discharge_raw$grid) %in% unique(changed_grid$old_grid))
+sum(unique(discharge_raw$grid) %in% changed_grid$updated_grid)
+
+length(unique(cam_raw$grid))
+sum(unique(cam_raw$grid) %in% changed_grid$old_grid)
+sum(unique(cam_raw$grid) %in% unique(changed_grid$updated_grid))
+
+sum(unique(discharge_raw$grid) %in% cam_raw$grid)
+```
+
+## Old GRID in our data, updated GRID NOT in our data
+```{r}
+## old GRID in our data, but updated GRID not in our data
+changed_grid %>% 
+  filter(old_grid %in% static_raw$grid, ! updated_grid %in% static_raw$grid) %>% 
+  arrange(old_grid) 
+```
+
+### Example 1
+Data pulled using old GRID
+```{r}
+discharge_raw %>% 
+  filter(grid == "R200002089")
+cam_raw %>% 
+  filter(grid == "R200002089")
+```
+No Data pulled using corresponding updated GRID
+```{r, echo=T}
+discharge_raw %>% 
+  filter(grid == "R215108619")
+cam_raw %>% 
+  filter(grid == "R215108619")
+```
+
+### Example 2
+Data pulled using old GRID
+```{r}
+discharge_raw %>% 
+  filter(grid == "R200302879")
+cam_raw %>% 
+  filter(grid == "R200302879")
+```
+No data pulled using corresponding updated GRID
+```{r, echo=T}
+discharge_raw %>% 
+  filter(grid == "R270390013")
+cam_raw %>% 
+  filter(grid == "R270390013")
+```
+
+## Both old and updated GRIDs in our data
+```{r}
+changed_grid %>% 
+  filter(old_grid %in% static_raw$grid, updated_grid %in% static_raw$grid) %>% 
+  arrange(old_grid)
+```
+
+Different data pulled using corresponding old/updated GRIDs
+
+### Example 3
+3 admission records vs. 2 admission records
+```{r}
+discharge_raw %>% 
+  filter(grid == "R200065814")
+discharge_raw %>% 
+  filter(grid == "R235732375")
+```
+11 CAM-ICU recods vs. 1 CAM-ICU records
+```{r}
+cam_raw %>% 
+  filter(grid == "R200065814")
+cam_raw %>% 
+  filter(grid == "R235732375")
+```
+### Example 4
+8-day hospital stay vs. 2-day hospital stay
+```{r}
+discharge_raw %>% 
+  filter(grid == "R200189675")
+discharge_raw %>% 
+  filter(grid == "R239370958")
+```
+91 CAM-ICU records vs. 9 CAm-ICU records
+```{r}
+cam_raw %>% 
+  filter(grid == "R200189675")
+cam_raw %>% 
+  filter(grid == "R239370958")
+```
+

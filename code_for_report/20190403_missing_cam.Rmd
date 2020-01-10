@@ -1,0 +1,371 @@
+---
+title: "BioVU Missing CAM"
+author: "Fei Ding"
+date: "April 3, 2019"
+output:
+  html_document:
+    toc: true
+---
+
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+library(tidyverse)
+library(readxl)
+library(Hmisc)
+library(magrittr)
+library(scales)
+library(lubridate)
+library(kableExtra)
+
+discharge_raw <- read_csv("../data/Samuels_Delirium_DISCHARGE_20180718.csv")
+daily_status <- read_csv("../output/daily_status_20190319.csv")
+hosp2 <- read_excel("../data/Hospitalization_dates_DCS_V01.xlsx", 
+                    sheet = "Hospitalization_dates_DCS_V01",
+                    na = c("", "NA"))
+names(discharge_raw) <- tolower(names(discharge_raw))
+discharge_raw1 <- discharge_raw %>% 
+  mutate(adm_dttm = mdy_hms(admiss_date),
+         adm_date = as_date(adm_dttm),
+         dc_dttm = mdy_hms(discharge_date),
+         dc_date = as_date(dc_dttm)) 
+
+discharge_raw1  %<>% 
+  filter(year(adm_date) >= 2004) %>%  # CAM data spans from 2005 to 2017
+  distinct(grid, adm_date, dc_date) %>% 
+  arrange(grid, adm_date, dc_date) %>% 
+  group_by(grid) %>% 
+  mutate(next_adm = lead(adm_date), 
+         next_dc = lead(dc_date),
+         pre_adm = lag(adm_date),
+         pre_dc = lag(dc_date)
+  ) %>% 
+  ungroup() 
+discharge_raw2  <- discharge_raw1 %>% 
+  filter(!is.na(dc_date)) %>% 
+  group_by(grid) %>% 
+  mutate(next_adm = lead(adm_date), 
+         next_dc = lead(dc_date),
+         pre_adm = lag(adm_date),
+         pre_dc = lag(dc_date)
+  ) %>% 
+  ungroup()
+discharge_raw2 %<>% 
+  filter(adm_date != pre_dc | is.na(pre_dc)) %>% 
+  mutate(
+    dc_date = case_when(
+      dc_date == next_adm ~ next_dc,
+      T ~ dc_date)
+  )
+discharge_raw2 %<>% 
+  group_by(grid) %>% 
+  mutate(adm_id = 1:n(),
+         adm_n = n()) %>% 
+  ungroup() %>% 
+  select(grid, adm_n, adm_id, adm_date, dc_date)
+daily_status_f1 <- sqldf::sqldf('SELECT *
+        FROM daily_status as t1
+        LEFT JOIN discharge_raw2 as t2 ON t1.grid = t2.grid AND dt BETWEEN adm_date AND dc_date
+        ')
+
+names(daily_status_f1)[12] <- "grid.1"
+daily_status_f1 <- as_tibble(daily_status_f1) %>% 
+  arrange(grid, dt) %>% 
+  mutate(
+    adm_day = dt - adm_date + 1
+  )
+
+
+
+hosp2 %<>% 
+  mutate(
+    adm_date = as_date(adm_date),
+    dc_date = as_date(dc_date),
+    dc_date1 = case_when(
+      !grepl("drop", `revised dc_date`) ~
+        ymd(19000101) + as.numeric(`revised dc_date`) - 2)
+  )
+hosp3 <- hosp2 %>%  
+  filter(!is.na(dc_date1)) %>% 
+  distinct(grid, adm_date, dc_date1) %>% 
+  rename(dc_date = dc_date1) %>% 
+  arrange(grid, adm_date, dc_date) %>% 
+  group_by(grid) %>% 
+  mutate(next_adm = lead(adm_date), 
+         next_dc = lead(dc_date),
+         pre_adm = lag(adm_date),
+         pre_dc = lag(dc_date)) %>% 
+  ungroup()
+hosp3 %<>%  
+  filter(adm_date > pre_adm | is.na(pre_adm)) %>% 
+  filter(adm_date > pre_dc | is.na(pre_dc)) %>% 
+  mutate(
+    dc_date = case_when(
+      adm_date == next_adm ~ next_dc,
+      dc_date == next_adm ~ next_dc,
+      T ~ dc_date)
+  ) %>% 
+  arrange(grid, adm_date, dc_date) %>% 
+  group_by(grid) %>% 
+  mutate(next_adm = lead(adm_date), 
+         next_dc = lead(dc_date),
+         pre_adm = lag(adm_date),
+         pre_dc = lag(dc_date)) %>% 
+  ungroup() 
+hosp4 <- hosp3 %>%
+  select(grid:dc_date) %>% 
+  group_by(grid) %>% 
+  mutate(adm_id = 1:n(),
+         adm_n = n()) %>% 
+  ungroup()
+daily_status_f2 <- sqldf::sqldf('SELECT *
+        FROM daily_status as t1
+        LEFT JOIN hosp4 as t2 ON t1.grid = t2.grid AND dt BETWEEN adm_date AND dc_date
+        ') #%>% 
+names(daily_status_f2)[12] <- "grid.1"
+daily_status_f2 <- as_tibble(daily_status_f2) %>% 
+  arrange(grid, dt) %>% 
+  mutate(
+    adm_day = dt - adm_date + 1
+  )
+```
+
+## Data processing
+
+There are two different hospital admission/discharge files.  The old one *Samuels_Delirium_DISCHARGE_20180718.csv* had more records and patients, while the new one *Hospitalization_dates_DCS_V01.xlsx* had fewer.
+
+They were processed in same way: 
+
+* Missing discharge records were removed.
+* Overlapped admissions were combined.
+* For the old file, admissions starting from 2004 were kept
+
+The old file has almost twice of admission/discharge records compared to the new file, and `r n_distinct(discharge_raw2$grid) - n_distinct(hosp4$grid)` more patients.
+
+```{r}
+discharge_raw2 %>% 
+  count(year(adm_date)) %>% 
+  full_join(
+    hosp4 %>% 
+      count(year(adm_date)),
+    by = "year(adm_date)",
+    suffix = c(".old", ".new")
+  ) %>% 
+  add_row(`year(adm_date)` = "Total", n.old = nrow(discharge_raw2), n.new = nrow(hosp4)) %>% 
+  kable(caption = "Years of Admission")  %>% 
+  kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  column_spec(1, bold = T) %>% 
+  row_spec(15, bold = T)
+
+  
+```
+
+As a reminder, last time we got daily status as following.  
+```{r}
+daily_status %>% 
+  count(status.today) %>% 
+  add_row(status.today = "Total", nn = nrow(daily_status)) %>% 
+  kable(caption = "Daily Status") %>% 
+  kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  column_spec(1, bold = T) %>% 
+  row_spec(6, bold = T)
+```
+
+
+After merging daily status and admission/discharge records, below are the assessment days without a matching admission/discharge record.
+```{r}
+daily_status_f1 %>% 
+  filter(is.na(adm_date)) %>% # 108,998
+  count(status.today) %>% 
+  full_join(
+    daily_status_f2 %>% 
+  filter(is.na(adm_date)) %>% # 60,114 days
+  count(status.today),
+  by = "status.today", 
+  suffix = c(".old", ".new")
+  ) %>% 
+  add_case(status.today = "Total", 
+           nn.old = sum(is.na(daily_status_f1$adm_date)), 
+           nn.new = sum(is.na(daily_status_f2$adm_date))
+                        ) %>% 
+  kable(caption = "Assessment Days without matching admission") %>% 
+    kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  column_spec(1, bold = T) %>% 
+  row_spec(6, bold = T)
+```
+
+## Missing CAM vs. hospital admission day
+Only assessment days with a matching admission/discharge record was plotted here.
+
+For the bar plot, admission day was capped at day 50.
+```{r}
+## make plots
+daily_status_f1 %>% 
+  filter(adm_day <= 50) %>% 
+  ggplot() +
+  geom_bar(aes(x = adm_day, fill = status.today)) +
+  labs(title = "Missing CAM vs. Hospital admission day", x = "Hospital admission day", y = "count of visits",
+       subtitle = "Using old admission/discharge data")
+
+daily_status_f1 %>% 
+  count(adm_day) %>% 
+  right_join(
+    daily_status_f1 %>% 
+      filter(status.today == "Unknown: RASS only") %>% 
+      count(adm_day),
+    by = "adm_day"
+  ) %>% 
+  mutate(pct = nn.y/nn.x) %>% 
+  ggplot(aes(x = adm_day, y = pct)) +
+  geom_point() +
+  geom_line() +
+  labs(title = "Missing CAM % vs. Hospital admission day", y = "Percent of days Missing CAM", x = "Hospital admission day",
+       subtitle = "Using old admission/discharge data")
+
+
+daily_status_f2 %>% 
+  filter(adm_day <= 50) %>% 
+  ggplot() +
+  geom_bar(aes(x = adm_day, fill = status.today)) +
+    labs(title = "Missing CAM vs. Hospital admission day", x = "Hospital admission day", y = "count of visits",
+       subtitle = "Using old admission/discharge data")
+
+  
+daily_status_f2 %>% 
+  count(adm_day) %>% 
+  right_join(
+    daily_status_f2 %>% 
+      filter(status.today == "Unknown: RASS only") %>% 
+      count(adm_day),
+    by = "adm_day"
+  ) %>% 
+  mutate(pct = nn.y/nn.x) %>% 
+  ggplot(aes(x = adm_day, y = pct)) +
+  geom_point() +
+  geom_line() +
+ labs(title = "Missing CAM % vs. Hospital admission day", y = "Percent of days Missing CAM", x = "Hospital admission day",
+       subtitle = "Using old admission/discharge data")
+
+
+```
+
+## Where do RASS-only days come from?
+Are they from hospital visits with no CAM-ICU at all or are they from hospital visits with some CAM?
+Only assessment days with a matching admission/discharge record was tabulated here.
+
+```{r}
+c1 <- daily_status_f1 %>% 
+  filter(status.today == "Unknown: RASS only", !is.na(adm_id)) %>% 
+  left_join(   
+    daily_status_f1 %>% 
+      filter(!is.na(adm_id)) %>%
+      mutate(n_cam = n_cam_neg + n_cam_pos) %>% 
+      group_by(grid, adm_id) %>% 
+      summarise(some_cam = max(n_cam) > 0),
+    by = c("grid", "adm_id")
+  ) %>% 
+  count(some_cam) %>%
+  add_case(some_cam = "Total", 
+           nn = sum(daily_status_f1$status.today == "Unknown: RASS only" & !is.na(daily_status_f1$adm_id)))
+  
+
+c2 <- daily_status_f2 %>% 
+  filter(status.today == "Unknown: RASS only", !is.na(adm_id)) %>% 
+  left_join(   
+    daily_status_f2 %>% 
+      filter(!is.na(adm_id)) %>%
+      mutate(n_cam = n_cam_neg + n_cam_pos) %>% 
+      group_by(grid, adm_id) %>% 
+      summarise(some_cam = max(n_cam) > 0),
+    by = c("grid", "adm_id")
+  ) %>% 
+  count(some_cam)%>%
+  add_case(some_cam = "Total", 
+           nn = sum(daily_status_f2$status.today == "Unknown: RASS only" & !is.na(daily_status_f2$adm_id)))
+  
+c1 %>% 
+  full_join(c2,
+            by = "some_cam",
+            suffix = c(".old", ".new")) %>% 
+  kable(caption = "RASS only days") %>% 
+    kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  column_spec(1, bold = T) %>% 
+  row_spec(3, bold = T)
+```
+## Example of RASS only days
+```{r}
+tb1 <- daily_status_f1 %>% 
+  select(grid, adm_n, adm_id, adm_date, dc_date, dt, adm_day,status.today) %>% 
+  filter(grid %in% c("R200000649", "R200006516")) #%>% 
+  #   mutate(
+  #   status.today = cell_spec(
+  #     status.today, "html",
+  #     color = "white",
+  #     background  = case_when(
+  #       status.today == "Delirious" ~ "#D55E00", 
+  #       status.today == "Normal" ~ "#56B4E9",
+  #       status.today == "Comatose" ~ "black",
+  #       status.today == "Unknown: RASS only" ~ "gray")
+  #     )
+  #   ) %>% 
+  #  kable(format = "html", escape = F, caption = "Old admission data") %>% 
+  # kable_styling(bootstrap_options = c("condensed", "bordered"), 
+  #               full_width = F,
+  #               position = "left") 
+
+tb2 <- daily_status_f2 %>% 
+  select(grid, adm_n, adm_id, adm_date, dc_date, dt, adm_day,status.today) %>% 
+  filter(grid %in% c("R200000649", "R200006516")) #%>% 
+  #   mutate(
+  #   status.today = cell_spec(
+  #     status.today, "html",
+  #     color = "white",
+  #     background  = case_when(
+  #       status.today == "Delirious" ~ "#D55E00", 
+  #       status.today == "Normal" ~ "#56B4E9",
+  #       status.today == "Comatose" ~ "black",
+  #       status.today == "Unknown: RASS only" ~ "gray")
+  #     )
+  #   ) %>% 
+  #  kable(format = "html", escape = F, caption = "New admission data") %>% 
+  # kable_styling(bootstrap_options = c("condensed", "bordered"), 
+  #               full_width = F,
+  #               position = "left") 
+
+tb <- tb1 %>% 
+  full_join(tb2,
+            by = c("grid", "dt", "status.today"),
+            suffix = c(".old", ".new")
+  ) %>% 
+  select(grid, dt, status.today, ends_with(".old"), ends_with((".new"))) 
+rowid1 <- with(tb,   which(is.na(adm_n.new) & !is.na(adm_n.old))) 
+rowid2 <- with(tb,   which(is.na(adm_n.new) & is.na(adm_n.old))) 
+tb %>% 
+  select(grid:adm_id.new) %>% 
+  mutate(
+    status.today = cell_spec(
+      status.today, "html",
+      color = "white",
+      background  = case_when(
+        status.today == "Delirious" ~ "#D55E00", 
+        status.today == "Normal" ~ "#56B4E9",
+        status.today == "Comatose" ~ "black",
+        status.today == "Unknown: RASS only" ~ "gray")
+      )
+    ) %>% 
+   kable(format = "html", escape = F, caption = "New admission data") %>% 
+  kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  row_spec(rowid1, background = "lightyellow") %>% 
+  row_spec(rowid2, background = "lightblue")
+```
+

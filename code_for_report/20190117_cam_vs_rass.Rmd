@@ -1,0 +1,98 @@
+---
+title: "BioVU CAM and RASS data"
+author: "Fei Ding"
+date: "January 23, 2019"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include = FALSE}
+library(tidyverse)
+library(Hmisc)
+library(scales)
+library(lubridate)
+library(pander)
+library(knitr)
+library(kableExtra)
+load("../output/data_raw.RData")
+
+static_raw <- as.tibble(static_raw)
+discharge_raw <- as.tibble(discharge_raw)
+cam_raw <- as.tibble(cam_raw)
+rass_raw <- as.tibble(rass_raw)
+# panderOptions('knitr.auto.asis', TRUE)
+
+
+```
+
+## CAM test name vs. CAM values
+
+We have four different CAM test names as listed below, and these tests have different corresponding CAM values.
+```{r, echo = F}
+kable(addmargins(xtabs( ~ cam_value + cam_test_name, data = cam_raw), 1)) %>% 
+  kable_styling(bootstrap_options = c("condensed"), full_width = F) %>% 
+  add_header_above(c("CAM value" = 1, "CAM Test Names" = length(unique(cam_raw$cam_test_name)))) %>% 
+  row_spec(18, bold = T)
+  
+```
+
+
+## CAM values vs. RASS values by CAM test name
+For each CAM test type, RASS score measured at the same time points were tabulated against CAM value.
+
+```{r, echo = F}
+test_name <-  "CAM-ICU"
+cam_rass <- cam_raw %>% 
+  filter(cam_test_name == test_name) %>% 
+  left_join(select(rass_raw, -rass_score_test_name), by = c("grid", "cam_date" = "rass_date"))
+# cam_rass %>% 
+#   count(rass_score)
+kable(xtabs( ~ rass_score + cam_value, data = cam_rass, addNA = T),
+      caption = paste("CAM test =", test_name)) %>% 
+  kable_styling(bootstrap_options = c("condensed"), full_width = F) %>% 
+  add_header_above(c("RASS score" = 1, "CAM value" = length(unique(cam_rass$cam_value)))) 
+ 
+test_name <-  "CAM Total"
+cam_rass <- cam_raw %>% 
+  filter(cam_test_name == test_name) %>% 
+  left_join(select(rass_raw, -rass_score_test_name), by = c("grid", "cam_date" = "rass_date"))
+# cam_rass %>% 
+#   count(rass_score)
+kable(xtabs( ~ rass_score + cam_value, data = cam_rass, addNA = T),
+      caption = paste("CAM test =", test_name)) %>% 
+  kable_styling(bootstrap_options = c("condensed"), full_width = F) %>% 
+  add_header_above(c("RASS score" = 1, "CAM value" = length(unique(cam_rass$cam_value)))) 
+
+
+test_name <- "Delirium Present (CAM>6)"
+cam_rass <- cam_raw %>% 
+  filter(cam_test_name == test_name) %>% 
+  left_join(select(rass_raw, -rass_score_test_name), by = c("grid", "cam_date" = "rass_date"))
+# cam_rass %>% 
+#   count(rass_score)
+kable(xtabs( ~ rass_score + cam_value, data = cam_rass, addNA = T),
+      caption = paste("CAM test =", test_name)) %>% 
+  kable_styling(bootstrap_options = c("condensed"), full_width = F) %>% 
+  add_header_above(c("RASS score" = 1, "CAM value" = length(unique(cam_rass$cam_value)))) 
+
+test_name <-  "Unable to assess CAM-ICU"
+cam_rass <- cam_raw %>% 
+  filter(cam_test_name == test_name) %>% 
+  left_join(select(rass_raw, -rass_score_test_name), by = c("grid", "cam_date" = "rass_date"))
+# cam_rass %>% 
+#   count(rass_score)
+kable(xtabs( ~ rass_score + cam_value, data = cam_rass, addNA = T),
+      caption = paste("CAM test =", test_name)) %>% 
+  kable_styling(bootstrap_options = c("condensed"), full_width = F) %>% 
+  add_header_above(c("RASS score" = 1, "CAM value" = length(unique(cam_rass$cam_value)))) 
+
+
+# pander(xtabs( ~ rass_score + cam_value, data = cam_rass, addNA = T))
+  
+  
+  
+  
+  
+```
+

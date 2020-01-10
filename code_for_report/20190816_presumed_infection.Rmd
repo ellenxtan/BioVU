@@ -1,0 +1,123 @@
+---
+title: "Identify Presumed Serious Infection"
+author: "Fei Ding"
+date: "August 22, 2019"
+output:
+  html_document:
+    toc: true
+    df_print: paged
+    
+---
+
+```{r setup, include= FALSE}
+library(tidyverse)
+library(scales)
+library(readxl)
+library(lubridate)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+blood_raw1 <- read_csv("../output/blood_culture_20190816.csv")
+cam_visits <- read_csv("../output/cam_stay_20190816.csv")
+changed_grid <- read_excel("../../Mito Delirium BioVU Data/Data/Changed_GRIDS.xlsx") %>% 
+  distinct()
+static_raw <- read_csv("../../Mito Delirium BioVU Data/Data/Samuels_Delirium_STATIC_20180718.csv")
+names(changed_grid) <- str_to_lower(names(changed_grid))
+names(static_raw) <- str_to_lower(names(static_raw))
+```
+
+## Algorithm
+
+First, extract blood culture days and antibiotic days happened during all the encounters in CAM-ICU visits.  
+
+* As suggested in *Rhee et al JAMA 2017*, data from day -1 and day 0 (i.e., 2 days prior to admission) was also included to account for data that might result from care in the emergency department prior to admission.  
+* Each blood culture day and antibotics day was assigned a corresponding admission id.  Note that since two admissions could be fewer than two days apart, a blood culture or antibiotic day could be assgined to two admissions (eg, day 8 of admission 2, and day -1 of admission 3).
+```{r}
+blood_raw1 %>% 
+  filter(grid == "R215156698")
+```
+
+Identify Qualifying Antibiotic Days (QAD)
+
+Definition of $\ge 4$ Qualifying Antibiotic Days in the reference:
+
+* First QAD is the day patient starts to receive an "new antibiotic" that was not given in the prior 2 calendar days.  This day should fall in the $\pm 2$ days window of blood culture day
+* Subsequent QADs can be different antibiotics as long as first dose of each antibiotic in the sequence is new.  
+* A gap of a single calendar day between the same antibiotic count as QADs as long as the gap is not > 1 day. 
+* There must be at least one new IV/IM antibiotic within the $\pm 2$ day window period.
+* If death occurs before 4 QADs, < 4 QADs can also qualify as long as the patient had consecutive QADs until day of , or 1 day prior to death.
+
+Since our current antibiotic data does not have medication name, we cannot really identify "new antibiotic", I simplify the QAD definition to consecutive antibiotics days without any gaps:
+
+* For each QAD sequence,  find first QAD and # of QADs 
+* Then for each admission, use the $\pm 2$ days of blood culture day as window period to see whether any first QAD falls in the window and the QAD sequence lasts for at least 4 days.
+
+Using the above algorithm, out of the `r comma(nrow(cam_visits))` CAM-ICU visit, `r comma(sum(cam_visits$infection))` visits were identified to have presumed serious infection.
+
+## Problem with dates/changed GRIDs
+When I tried to incorporate death date into the definition, I found a problem:  for the updated GRIDs, multiple old GRIDs correspond to one single new GRIDs.  However, the date shift was done differently under the old GRIDs.  This will cause problem when we combine dates for these GRIDs.  
+
+To solve this problem, instead of using dates directly, we should use difference in dates.  Since everyone has a DOB, we can use that as the starting point.  However, we need to be very careful about which DOB to use for those updated GRIDs based on whether they shift the dates using the old or new GRID. 
+```{r}
+static_raw1 <- changed_grid %>% 
+  right_join(static_raw,
+             by = c("old_grid" = "grid")) %>% 
+  mutate(
+    grid = case_when(
+      is.na(updated_grid) ~ old_grid,
+      !is.na(updated_grid) ~ updated_grid),
+    dob = mdy(dob),
+    dod = mdy(dod),
+    days = dod - dob
+  ) 
+
+static_raw1 %>% 
+  filter(grid == "R202092875") %>% 
+  select(old_grid, grid, sex, race, dob, dod, days)
+vital_data <- changed_grid %>% 
+  right_join(static_raw,
+             by = c("old_grid" = "grid")) %>% 
+  mutate(
+    grid = case_when(
+      is.na(updated_grid) ~ old_grid,
+      !is.na(updated_grid) ~ updated_grid),
+    dod1 = case_when(
+      !is.na(dod) & dod != "." ~ as.numeric(mdy(dod) - mdy(dob)))
+  ) %>% 
+  distinct(grid, dod1, death_flag)
+```
+
+After converting DOD to days from DOB, there are still 235 paris of conflicting vital data. If a patient had one death flag, I just kept it.  
+```{r}
+vital_data %>%
+  group_by(grid) %>% 
+  filter(n() > 1) %>% 
+  arrange(grid) 
+vital_data1 <- vital_data %>% 
+  group_by(grid) %>% 
+  summarise(dod1 = case_when(
+    !all(is.na(dod1)) ~ max(dod1, na.rm = T) 
+  ),
+            death_flag = max(death_flag)) 
+```
+
+16,632 patients died but did not have a DOD. 
+```{r}
+vital_data1 %>% 
+  filter((death_flag == 1 & is.na(dod1)))
+```
+
+## Next steps
+I am working on converting all the dates to days from DOB and recombine data to get CAM-ICU visits, and then incorporating death dates to presumed infection definition.  
+My algorith is not very fast, and it hasn't account for the "new antibiotic" yet. Maybe we can ask for the SAS code from Rhee's group.
+
+When I convert all CAM and RASS dates to days from DOB, I was surprised to see no data duplication at all, i.e., the data was very different for the same GRIDs.  Was the time shifted too or just the date?  
+
+
+
+
+
+

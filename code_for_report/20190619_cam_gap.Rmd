@@ -1,0 +1,408 @@
+---
+title: "BioVU CAM-ICU gaps"
+author: "Fei Ding"
+date: "June 19, 2019"
+output:
+  html_document:
+    toc: true
+    df_print: paged
+    
+---
+
+
+```{r setup, include = FALSE}
+library(tidyverse)
+library(readxl)
+library(Hmisc)
+library(magrittr)
+library(scales)
+library(lubridate)
+library(kableExtra)
+library(qwraps2)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+#. import data ---------------------------------------------------------------
+load("../output/data_raw.RData")
+rm(static_raw)
+cam_raw <- cam_raw %>% 
+  rename(cam_time = cam_date) %>% 
+  mutate(dttm = mdy_hms(cam_time),
+         cam_date = as_date(dttm)) %>% 
+  arrange(grid, dttm)
+cam_icu <- cam_raw %>% 
+  filter(cam_test_name == "CAM-ICU") %>% 
+  select(grid, cam_date, dttm, cam_value)
+rass_raw <- rass_raw %>% 
+  rename(rass_time = rass_date) %>% 
+  mutate(dttm = mdy_hms(rass_time),
+         rass_date = as_date(dttm)) %>% 
+  arrange(grid, dttm) 
+cam_dup_row <- cam_icu %>% 
+  select(grid, dttm) %>% 
+  duplicated() %>% 
+  which()
+cam_icu_dup <- cam_icu %>% 
+  slice(c(cam_dup_row, cam_dup_row - 1)) %>%
+  arrange(grid, dttm, cam_value) 
+cam_icu_dup_w <- cam_icu_dup %>% 
+  group_by(grid, dttm) %>% 
+  mutate(cam_value.x = lag(cam_value)) %>% 
+  ungroup() %>% 
+  filter(!is.na(cam_value.x)) %>% 
+  rename(cam_value.y = cam_value)
+rass_dup_row <- rass_raw %>% 
+  select(grid, dttm) %>% 
+  duplicated() %>% 
+  which()
+rass_dup <- rass_raw %>% 
+  select(-rass_time) %>% 
+  slice(c(rass_dup_row, rass_dup_row - 1)) %>% 
+  arrange(grid, dttm, rass_score)
+rass_dup_w <- rass_dup %>% 
+  group_by(grid, dttm) %>% 
+  mutate(rass_score.x = lag(rass_score),
+         rass_score_test_name.x = lag(rass_score_test_name)) %>% 
+  ungroup() %>% 
+  filter(!is.na(rass_score.x)) %>% 
+  rename(rass_score.y = rass_score,
+         rass_score_test_name.y = rass_score_test_name)
+cam_rass_dup <-  cam_icu_dup_w %>% 
+  select(grid, dttm, cam_date, cam_value.x, cam_value.y) %>% 
+  semi_join(
+    rass_dup %>% 
+      distinct(grid, dttm) %>% 
+      dplyr::intersect(
+        cam_icu_dup %>% 
+          distinct(grid, dttm) 
+      ),
+    by = c("grid", "dttm")
+  ) %>% 
+  left_join(
+    rass_dup_w %>% 
+      select(grid, dttm, rass_score.y, rass_score.x),
+    by = c("grid", "dttm")
+  )
+rass_dup_cam <- rass_dup_w %>%
+  anti_join(cam_rass_dup, by = c("grid", "dttm")) %>%
+  left_join(cam_raw,
+            by = c("grid", "dttm" )) %>%
+  select(grid, dttm, rass_score.x, rass_score.y, cam_date, cam_value, cam_test_name)
+rass_dup_red <- rass_dup_w %>% 
+  select(-rass_score.y, -rass_score_test_name.y) %>% 
+  rename(rass_score = rass_score.x,
+         rass_score_test_name = rass_score_test_name.x) 
+
+
+rass_clean <- rass_raw %>% 
+  select(-rass_time) %>% 
+  anti_join(rass_dup_red, by = c("grid", "dttm")) %>% 
+  bind_rows(rass_dup_red)
+cam_icu_dup_rass <- cam_icu_dup_w %>%
+  #anti_join(cam_rass_dup, by = c("grid", "dttm")) %>% 
+  left_join(rass_clean, 
+            by = c("grid", "dttm")) %>% 
+  select(grid, dttm, cam_date, cam_value.x, cam_value.y, rass_date, rass_score, rass_score_test_name)
+cam_icu_dup_rass <- cam_icu_dup_rass %>% 
+  mutate(cam_value = case_when(
+    cam_value.x == "Delirium present" & cam_value.y == "No delirium" ~ "Unk",
+    cam_value.x == "Negtiv" & cam_value.y == "Postiv" ~ "Unk",
+    cam_value.x %in% c("Negtiv", "Postiv") & cam_value.y == "Unases" & rass_score %in% -5:-4 ~ "UA",
+    cam_value.x %in% c("Negtiv", "Postiv") & cam_value.y == "Unases" & !rass_score %in% -5:-4 ~ cam_value.x
+  )) 
+cam_icu_clean <- cam_icu %>% 
+  select(grid, cam_value, dttm, cam_date) %>% 
+  anti_join(cam_icu_dup_rass, by = c("grid", "dttm")) %>% 
+  bind_rows(select(cam_icu_dup_rass, grid, cam_value, dttm, cam_date))
+cam_rass <- cam_icu_clean %>% 
+  full_join(select(rass_clean, -rass_score_test_name), 
+            by = c("grid", "dttm")) %>% 
+  select(grid, dttm, cam_date, cam_value, rass_date, rass_score) %>% 
+  arrange(grid, dttm) %>% 
+  mutate(
+    dt = as_date(dttm),
+    rass = case_when(
+      rass_score %in% -5:4 ~ rass_score
+    ),
+    cam = case_when(
+      rass_score %in% -5:-4 ~ "UA",
+      cam_value %in% c("Delirium present", "Postiv") ~ "Positive",
+      cam_value %in% c("No delirium", "Negtiv") ~ "Negative",
+      cam_value == "Unk" ~ "Unk" # conflicting CAM-ICU at the same time point
+    )
+  )
+
+cam_rass_daily <- cam_rass %>% 
+  group_by(grid, dt) %>% 
+  count(cam) %>% 
+  ungroup() %>% 
+  spread(key = cam, value = n, fill = 0L) %>% 
+  bind_cols(
+    cam_rass %>% 
+      mutate(
+        rass_c = case_when(
+          rass %in% -5:-4 ~ "n_rass_coma",
+          rass %in% -3:4 ~ "n_rass_nocoma",
+          is.na(rass) ~ "n_rass_na"
+        )
+      ) %>% 
+      group_by(grid, dt) %>% 
+      count(rass_c) %>% 
+      ungroup() %>% 
+      spread(key = rass_c, value = n, fill = 0L) 
+  ) %>% 
+  rename(n_cam_pos = Positive,
+         n_cam_neg = Negative,
+         n_cam_unk = Unk,
+         n_cam_ua = UA,
+         n_cam_na = `<NA>`) %>% 
+  mutate(n = n_rass_coma + n_rass_na + n_rass_nocoma) %>% 
+  select(-grid1, -dt1)
+
+cam_rass_daily <- cam_rass_daily %>% 
+  mutate(
+    status.today = case_when(
+      n_cam_pos > 0 ~ "Delirious",
+      n_rass_coma > 0 ~ "Comatose",
+      n_cam_unk > 0 ~ "Unkown: conflicting CAM",
+      n_cam_neg > 0 ~ "Normal",
+      n == n_cam_na & n_rass_nocoma > 0 ~ "Unknown: RASS only",
+      n == n_cam_na & n == n_rass_na ~ "Unknown: No CAM nor RASS"
+    )) 
+
+
+## find CAM admission
+discharge_raw1 <- discharge_raw %>% 
+  mutate(adm_dttm = mdy_hms(admiss_date),
+         adm_date = as_date(adm_dttm),
+         dc_dttm = mdy_hms(discharge_date),
+         dc_date = as_date(dc_dttm))  %>% 
+  filter(year(adm_date) >= 2004) %>%  # CAM data spans from 2005 to 2017
+  distinct(grid, adm_date, dc_date) %>% 
+  arrange(grid, adm_date, dc_date) %>% 
+  group_by(grid) %>% 
+  mutate(next_adm = lead(adm_date), 
+         next_dc = lead(dc_date),
+         pre_adm = lag(adm_date),
+         pre_dc = lag(dc_date)
+  ) %>% 
+  ungroup() 
+
+## deal with missing
+discharge_na <- discharge_raw1 %>% 
+  filter(is.na(dc_date), adm_date != pre_adm | is.na(pre_adm))
+discharge_raw2  <- discharge_raw1 %>% 
+  filter(!is.na(dc_date)) %>% 
+  group_by(grid) %>% 
+  mutate(next_adm = lead(adm_date), 
+         next_dc = lead(dc_date),
+         pre_adm = lag(adm_date),
+         pre_dc = lag(dc_date)
+  ) %>% 
+  ungroup()
+## deal with overlap
+discharge_raw2 %<>% 
+  filter(adm_date != pre_dc | is.na(pre_dc)) %>% 
+  mutate(
+    dc_date = case_when(
+      dc_date == next_adm ~ next_dc,
+      T ~ dc_date)
+  )
+#> Final admission data ---------------
+# 219,888 entries; 94,794 pts
+discharge_raw2 %<>% 
+  # group_by(grid) %>% 
+  # mutate(adm_id = 1:n(),
+  #        adm_n = n()) %>% 
+  # ungroup() %>% 
+  select(grid, adm_date, dc_date)
+
+some_cam <- cam_rass_daily %>% 
+  filter(n != n_cam_na, n != n_cam_ua, n != n_cam_na + n_cam_ua)
+# 577,005 days
+# 534,405 days
+some_cam_daily <- sqldf::sqldf('SELECT *
+        FROM some_cam as t1
+        LEFT JOIN discharge_raw2 as t2 
+        ON t1.grid = t2.grid AND dt BETWEEN adm_date AND dc_date
+        ') 
+names(some_cam_daily)
+names(some_cam_daily)[13] <- "grid.1"
+
+cam_visits <- some_cam_daily %>% 
+  as.tibble() %>% 
+  distinct(grid, adm_date, dc_date)
+cam_visits_nona <- cam_visits %>%  
+  filter(!is.na(adm_date)) %>% 
+  group_by(grid) %>% 
+  mutate(adm_id = 1:n(),
+         adm_n = n()) %>% 
+  ungroup() 
+# daily status in CAM visits
+daily_status_f1 <- sqldf::sqldf('SELECT *
+        FROM cam_rass_daily as t1
+        INNER JOIN cam_visits_nona as t2 
+        ON t1.grid = t2.grid AND dt BETWEEN adm_date AND dc_date
+                                ')
+
+names(daily_status_f1)
+names(daily_status_f1)[13] <- "grid.1"
+daily_status_f2 <- some_cam_daily %>% 
+  as.tibble() %>% 
+  filter(is.na(adm_date)) %>% 
+  bind_rows(as.tibble(daily_status_f1)) %>% 
+  arrange(grid, dt)
+daily_status_f1 %>% 
+  as.tibble() %>%
+  count(status.today)
+tt <- daily_status_f1 %>% 
+  as.tibble() %>%
+  filter(! status.today %in% c("Unknown: RASS only", "Unknown: No CAM nor RASS")) %>% 
+  group_by(grid, adm_date) %>% 
+  mutate(first_cam = min(dt), last_cam = max(dt)) %>% 
+  select(grid, adm_n, adm_id, adm_date, dc_date, first_cam, last_cam, dt, status.today) %>% 
+  ungroup() %>% 
+  mutate(cam_day = dt - first_cam + 1,
+         bt_days = last_cam - first_cam + 1,
+         first_cam_fr_adm = first_cam - adm_date,
+         last_cam_fr_dc = dc_date - last_cam)
+tt %>% 
+  count(status.today)
+cam_gap <- read_csv("../output/cam_gap_20190618.csv") 
+
+```
+
+## Data Management
+
+First, CAM-ICU and RASS data were merged and cleaned as before to get daily status.  One difference is that, now conflicting CAM-ICUs assessed at the same time was kept as *Unk*
+```{r}
+addmargins(xtabs( ~ rass + cam, data = cam_rass, addNA = T)) %>% 
+  kable(caption = "CAM-ICU vs RASS after cleaning up") %>% 
+   kable_styling(bootstrap_options = c("bordered", "condensed"), 
+                full_width = F,
+                position = "left") %>% 
+  add_header_above(c("RASS score" = 1, "CAM-ICU value" = length(unique(cam_rass$cam)) + 1))
+cam_rass_daily %>% 
+  count(status.today) %>% 
+  mutate(pct = percent(nn/nrow(cam_rass_daily))) %>% 
+  kable(caption = "Daily Status") %>% 
+  kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  column_spec(1, bold = T)
+```
+
+Then CAM-ICU visits were identified-If a visit had RASS only, it was not included.  This time I focused on CAM-ICU visits that had matching admission records since the ones without a matching admission record requires more data management such as changing admission/discharge dates.
+
+Below is an example of CAM-ICU outside admission records. One is not related to any admission record, and the other is just one day before admission date.
+```{r}
+daily_status_f2 %>% 
+  filter(grid == "R200006516", year(dt) %in% 2010:2011, month(dt) %in% c(2, 10)) %>% 
+  select(grid, dt, status.today, adm_id, adm_n, adm_date, dc_date) 
+```
+
+
+There were `r nrow(cam_visits_nona)` CAM-ICU visits with complete admission/discharge data.  A Patient may have more than one visits.
+
+```{r}
+daily_status_f1 %>% 
+  count(status.today) %>% 
+  mutate(pct = percent(nn/nrow(daily_status_f1))) %>% 
+  kable(caption = "Daily Status in CAM-ICU visits") %>% 
+  kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  column_spec(1, bold = T)
+```
+
+For each CAM-ICU visit, the first and last CAM-ICU was identified (including UA due to comma), and any non-comma days in between without a CAM-ICU were considered holes.  Number of days between first CAM-ICU and admission date, and between last CAM-ICU and discharge date were also calculated.  
+**One thing to consider: do we want to include UA as last CAM-ICU?**
+
+## Results
+
+Out of the `r comma(nrow(cam_visits_nona))` CAM-ICU visits, `r paste0(comma(sum(cam_gap$n_hole == 0)), " (", percent(sum(cam_gap$n_hole == 0)/nrow(cam_visits_nona)), ")")` visits had complete CAM-ICU data.
+Overall, there are `r comma(sum(cam_gap$bt_days))` hospital days that should have CAM-ICU data, and the size of all holes in-between those days are  `r comma(sum(cam_gap$all_hole_size))` days, missing rate is `r percent(sum(cam_gap$all_hole_size)/as.numeric(sum(cam_gap$bt_days)))`
+
+
+```{r}
+cam_gap <- cam_gap %>% 
+  mutate(pct_missing = all_hole_size/bt_days*100)
+cam_gap %>%
+   select(bt_days:pct_missing) %>%
+   describe()
+cam_gap %>% 
+  ggplot() +
+  geom_histogram(aes(x = bt_days), binwidth = 10) +
+  scale_y_log10()  +
+  labs(x = "# of Days between first and last CAM-ICU", title = "Distribution of # of Days between first and last CAM-ICU")
+cam_gap %>% 
+  ggplot() +
+  geom_histogram(aes(x = first_cam_fr_adm), binwidth = 10) +
+  scale_y_log10()  +
+  labs(x = "# of Days between first CAM-ICU and admission date", title = "Distribution of # of Days between first CAM-ICU and admission date") 
+cam_gap %>% 
+  ggplot() +
+  geom_histogram(aes(x = last_cam_fr_dc), binwidth = 10) +
+  scale_y_log10()  +
+  labs(x = "# of Days between last CAM-ICU and discharge date", title = "Distribution of # of Days between last CAM-ICU and discharge date") 
+cam_gap %>% 
+  ggplot() +
+  geom_histogram(aes(x = n_hole), binwidth = 1) +
+  scale_y_log10()  +
+  labs(x = "# of holes between first and last CAM-ICU", title = "Distribution of # of holes between first and last CAM-ICU") 
+cam_gap %>% 
+  ggplot() +
+  geom_histogram(aes(x = all_hole_size), binwidth = 10) +
+  scale_y_log10()  +
+  labs(x = "size of all holes between first and last CAM-ICU", title = "Distribution of size of all holes between first and last CAM-ICU")
+cam_gap %>% 
+  ggplot() +
+  geom_histogram(aes(x = max_hole_size), binwidth = 10) +
+  scale_y_log10()  +
+  labs(x = "size of the max hole between first and last CAM-ICU", title = "Distribution of size of the max hole between first and last CAM-ICU")
+cam_gap %>% 
+  ggplot() +
+  geom_histogram(aes(x = pct_missing), binwidth = 5) +
+  scale_y_log10()  +
+  labs(x = "% of Missing days between first and last CAM-ICU", title = "Distribution of % of missing days between first and last CAM-ICU")
+
+n_30 <- cam_gap %>% 
+  filter(bt_days > 30) %>% 
+  count() %>% 
+  as.numeric()
+
+# cam_gap %>% 
+#    select(bt_days:pct_missing) %>% 
+#   qsummary(.)
+# cam_gap %>% 
+#   select(bt_days:pct_missing) %>% 
+#   summary_table(.)
+
+
+```
+
+### Long hospital stays
+Out of the `r comma(nrow(cam_visits_nona))` CAM-ICU visits, `r comma(n_30)` had their last CAM-ICU more than 30 days after the first CAM-ICU.
+Below are two examples of visits where max hole size is larger than 100.  The first example's last assessment is comatose. while the second example's last assessment is Normal.
+```{r}
+# cam_gap %>% 
+#   filter(bt_days > 200) %>% 
+#   print(n = 100)
+# cam_gap %>% 
+#   filter(max_hole_size > 100 | all_hole_size > 100) %>% 
+#   print(n = 100) 
+tt %>% 
+  filter(grid == "R236336608", adm_id == 2) 
+tt %>% 
+  filter(grid == "R278187160", adm_id == 3) 
+```
+
+One note on if we want to cut hospital days at day 30.  A patient may have really long hospital stay and had delirious at late days. The below patient's long hospital stay had three delirious days, and all other days are normal.
+```{r}
+tt %>% 
+    filter(grid == "R213453715", adm_id == 2, status.today == "Delirious") 
+```
+

@@ -1,0 +1,110 @@
+---
+title: "Effect of changed GRID"
+author: "Fei Ding"
+date: "June 19, 2019"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+library(tidyverse)
+library(readxl)
+library(lubridate)
+library(scales)
+library(kableExtra)
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+cam_visits <- read_csv("../output/cam_stay_20190812.csv") %>% 
+  filter(bt_days != coma_days)
+cam_hosp <- read_csv("../output/cam_stay_days_20190812.csv") %>% 
+  semi_join(cam_visits, by = c("grid", "hosp_stay_num1"))
+```
+
+GRID was updated to the new ones for admission data, CAM data, and RASS data.
+
+Since sometimes multiple old GRIDs correspond to one new GRID, we ended up with some overlapped admission records, and these records were collapsed.  If the discharge date is missing, the admission date is counted as one hospital day.
+
+## CAM-ICU days without admission records
+There are `r comma(sum(is.na(cam_hosp$hosp_stay_num)))` days with CAM-ICU assessments (Comatose, Delirious, or Normal) that fall outside the admission records.  All of these days were also included in our data:
+
+If the CAM-ICU days fell just outside an existing admission record, the hospital stay was extended by CAM-ICU days. `r sum(cam_visits$note == "Only CAM-ICU, no admission", na.rm = T)` existing admission records were extended.
+
+Otherwise, the CAM-ICU days were grouped into hospital stays by themselves. In this case, a missing CAM-ICU day will be counted as not missing, but discharged from hospital and readmitted one day later.  `r sum(cam_visits$note == "Admission extended by CAM-ICU days", na.rm = T)` admission records were created this way.
+
+## Visit Summary
+Then visits with at least one CAM-ICU day (delirious or normal) were identified. Note that coma-only visits were also excluded here.  Below status was summarised at visit level. Note that A visit may have both coma and delirium.
+
+```{r}
+coma_q <- cam_visits %>% 
+  filter(any_coma > 0) %>% 
+  pull(coma_days) %>% 
+  quantile()
+del_q <- cam_visits %>% 
+  filter(any_del > 0) %>% 
+  pull(del_days) %>% 
+  quantile()
+tibble(
+  `Visit Status` = c("Total # of visits", 
+           "# of visits with coma", "median # of days with coma (IQR)",
+           "# of visits with delirium", "median # of days with delirium (IQR)",
+           "# of visits with all normal", "# of visits with normal + unknown"),
+  n = c(comma(nrow(cam_visits)), 
+             comma(sum(cam_visits$any_coma)), paste0(coma_q[3], " (", coma_q[2], ", ", coma_q[4], ")"),
+             comma(sum(cam_visits$any_del)), paste0(del_q[3], " (", del_q[2], ", ", del_q[4], ")"),
+             comma(sum(cam_visits$all_norm)), comma(sum(cam_visits$norm_un)))
+  ) %>% 
+  kable(caption = "CAM-ICU visit summary") %>% 
+    kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  column_spec(1, bold = T) %>% 
+  add_indent(c(3, 5))
+```
+
+For each CAM-ICU visit, the first and last CAM-ICU day was identified (including coma), and any non-coma days in between without a CAM-ICU were considered holes. 
+
+## Missing rates
+
+Out of the `r comma(nrow(cam_visits))` CAM-ICU visits, `r paste0(comma(sum(cam_visits$all_hole_size == 0)), " (", percent(sum(cam_visits$all_hole_size == 0)/nrow(cam_visits)), ")")` visits had complete CAM-ICU data.
+Overall, there are `r comma(sum(cam_visits$bt_days))` hospital days that should have CAM-ICU data, and the size of all holes in-between those days are  `r comma(sum(cam_visits$all_hole_size))` days, missing rate is `r percent(sum(cam_visits$all_hole_size)/as.numeric(sum(cam_visits$bt_days)))`
+
+## Identify sepsis visits
+
+```{r}
+sep_dates <- read_excel("../../Mito Delirium BioVU Data/Phenotype data/Sepsis Code Days.xlsx")
+changed_grid <- read_excel("../../Mito Delirium BioVU Data/Data/Changed_GRIDS.xlsx")
+
+changed_grid <- distinct(changed_grid)
+names(changed_grid) <- tolower(names(changed_grid))
+names(sep_dates) <- tolower(names(sep_dates))
+
+sep_dates <- sep_dates %>% 
+  mutate(sep_date = as_date(`sepsis code_date`)) %>% 
+  left_join(changed_grid,
+          by = c("grid" = "old_grid")) %>% 
+  mutate(grid = ifelse(!is.na(updated_grid), updated_grid, grid)) %>% 
+  distinct(grid, sep_date) %>% 
+  mutate(sepsis = 1)
+
+cam_hosp <- cam_hosp %>%  
+  left_join(sep_dates,
+            by = c("grid", "dt" = "sep_date"))
+
+cam_visits1 <- cam_hosp %>% 
+  group_by(grid, hosp_stay_num1) %>% 
+  summarise(sep_days = sum(sepsis, na.rm = T)) %>% 
+  ungroup() %>% 
+  left_join(cam_visits, by = c("grid", "hosp_stay_num1")) 
+```
+
+Using *Sepsis Code Days.xlsx* (GRID also updated), `r comma(sum(cam_visits1$sep_days > 0))` CAM-ICU visits had at least one Sepsis days.
+ 
+```{r}
+ggplot(data = cam_visits1) +
+  geom_histogram(aes(x = sep_days), binwidth = 1) +
+  scale_y_log10() +
+  labs(title = "Distribution of # of sepsis days during CAM-ICU visit", x = "# of sepsis days")
+```
+

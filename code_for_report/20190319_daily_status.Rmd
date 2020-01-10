@@ -1,0 +1,400 @@
+---
+title: "BioVU daily status"
+author: "Fei Ding"
+date: "March 19, 2019"
+output:
+  html_document:
+    toc: true
+    theme: united
+---
+
+```{r setup, include = FALSE}
+library(tidyverse)
+library(scales)
+library(lubridate)
+library(kableExtra)
+
+load("../output/data_raw.RData")
+
+rm(static_raw)
+rm(discharge_raw)
+
+cam_raw <- cam_raw %>% 
+  rename(cam_time = cam_date) %>% 
+  mutate(dttm = mdy_hms(cam_time),
+         cam_date = as_date(dttm)) %>% 
+  arrange(grid, dttm)
+rass_raw <- rass_raw %>% 
+  rename(rass_time = rass_date) %>% 
+  mutate(dttm = mdy_hms(rass_time),
+         rass_date = as_date(dttm)) %>% 
+  arrange(grid, dttm) 
+cam_icu <- cam_raw %>% 
+  filter(cam_test_name == "CAM-ICU") %>% 
+  select(grid, cam_date, dttm, cam_value)
+cam_dup_row <- cam_icu %>% 
+  select(grid, dttm) %>% 
+  duplicated() %>% 
+  which()
+cam_icu_dup <- cam_icu %>% 
+  slice(c(cam_dup_row, cam_dup_row - 1)) %>%
+  arrange(grid, dttm, cam_value) 
+cam_icu_dup_w <- cam_icu_dup %>% 
+  group_by(grid, dttm) %>% 
+  mutate(cam_value.x = lag(cam_value)) %>% 
+  ungroup() %>% 
+  filter(!is.na(cam_value.x)) %>% 
+  rename(cam_value.y = cam_value)
+rass_dup_row <- rass_raw %>% 
+  select(grid, dttm) %>% 
+  duplicated() %>% 
+  which()
+rass_dup <- rass_raw %>% 
+  select(-rass_time) %>% 
+  slice(c(rass_dup_row, rass_dup_row - 1)) %>% 
+  arrange(grid, dttm, rass_score)
+rass_dup_w <- rass_dup %>% 
+  group_by(grid, dttm) %>% 
+  mutate(rass_score.x = lag(rass_score),
+         rass_score_test_name.x = lag(rass_score_test_name)) %>% 
+  ungroup() %>% 
+  filter(!is.na(rass_score.x)) %>% 
+  rename(rass_score.y = rass_score,
+         rass_score_test_name.y = rass_score_test_name)
+cam_rass_dup <-  cam_icu_dup_w %>% 
+  select(grid, dttm, cam_date, cam_value.x, cam_value.y) %>% 
+  semi_join(
+    rass_dup %>% 
+      distinct(grid, dttm) %>% 
+      dplyr::intersect(
+        cam_icu_dup %>% 
+          distinct(grid, dttm) 
+      ),
+    by = c("grid", "dttm")
+  ) %>% 
+  left_join(
+    rass_dup_w %>% 
+      select(grid, dttm, rass_score.y, rass_score.x),
+    by = c("grid", "dttm")
+  )
+rass_dup_red <- rass_dup_w %>% 
+  select(-rass_score.y, -rass_score_test_name.y) %>% 
+  rename(rass_score = rass_score.x,
+         rass_score_test_name = rass_score_test_name.x) 
+rass_clean <- rass_raw %>% 
+  select(-rass_time) %>% 
+  anti_join(rass_dup_red, by = c("grid", "dttm")) %>% 
+  bind_rows(rass_dup_red)
+cam_icu_dup_rass <- cam_icu_dup_w %>%
+  left_join(rass_clean, 
+            by = c("grid", "dttm")) %>% 
+  select(grid, dttm, cam_date, cam_value.x, cam_value.y, rass_date, rass_score, rass_score_test_name)
+cam_icu_dup_rass <- cam_icu_dup_rass %>% 
+  mutate(cam_value = case_when(
+    cam_value.x == "Delirium present" & cam_value.y == "No delirium" ~ "Unk",
+    cam_value.x == "Negtiv" & cam_value.y == "Postiv" ~ "Unk",
+    cam_value.x %in% c("Negtiv", "Postiv") & cam_value.y == "Unases" & rass_score %in% -5:-4 ~ "UA",
+    cam_value.x %in% c("Negtiv", "Postiv") & cam_value.y == "Unases" & !rass_score %in% -5:-4 ~ cam_value.x
+  )) 
+cam_icu_clean <- cam_icu %>% 
+  select(grid, cam_value, dttm, cam_date) %>% 
+  anti_join(cam_icu_dup_rass, by = c("grid", "dttm")) %>% 
+  bind_rows(select(cam_icu_dup_rass, grid, cam_value, dttm, cam_date))
+cam_rass <- cam_icu_clean %>% 
+  full_join(select(rass_clean, -rass_score_test_name), 
+            by = c("grid", "dttm")) %>% 
+  select(grid, dttm, cam_date, cam_value, rass_date, rass_score) %>% 
+  arrange(grid, dttm) %>% 
+  mutate(
+    dt = as_date(dttm),
+    rass = case_when(
+      rass_score %in% -5:4 ~ rass_score
+    ),
+    cam = case_when(
+      rass_score %in% -5:-4 ~ "UA",
+      cam_value %in% c("Delirium present", "Postiv") ~ "Positive",
+      cam_value %in% c("No delirium", "Negtiv") ~ "Negative"
+    )
+  )
+
+cam_rass_daily <- cam_rass %>% 
+  group_by(grid, dt) %>% 
+  count(cam) %>% 
+  ungroup() %>% 
+  spread(key = cam, value = n, fill = 0L) %>% 
+  bind_cols(
+    cam_rass %>% 
+      mutate(
+        rass_c = case_when(
+          rass %in% -5:-4 ~ "n_rass_coma",
+          rass %in% -3:4 ~ "n_rass_nocoma",
+          is.na(rass) ~ "n_rass_na"
+        )
+      ) %>% 
+      group_by(grid, dt) %>% 
+      count(rass_c) %>% 
+      ungroup() %>% 
+      spread(key = rass_c, value = n, fill = 0L) 
+  ) %>% 
+  rename(n_cam_pos = Positive,
+         n_cam_neg = Negative,
+         n_cam_ua = UA,
+         n_cam_na = `<NA>`) %>% 
+  mutate(n = n_rass_coma + n_rass_na + n_rass_nocoma) %>% 
+  select(-grid1, -dt1)
+
+cam_rass_daily <- cam_rass_daily %>% 
+  mutate(
+    status.today = case_when(
+      n_cam_pos > 0 ~ "Delirious",
+      n_rass_coma > 0 ~ "Comatose",
+      n_cam_neg > 0 ~ "Normal",
+      n == n_cam_na & n_rass_nocoma > 0 ~ "Unknown: RASS only",
+      n == n_cam_na & n == n_rass_na ~ "Unknown: No CAM nor RASS"
+    )) 
+
+```
+
+Only *CAM-ICU* data was used.  *Unable to Assess CAM-ICU* data was checked separately.  They either did not provide any new information in addition to RASS score or having conflict RASS values.  So they were not included here.
+
+# Data Management before merge
+In order to merge RASS data and CAM-ICU data by assessment time, duplicated CAM-ICU or RASS need to be reduced first.
+
+## Duplicated assessment time in RASS
+285 pairs of RASS scores were measured at duplicated assessment time points.
+
+Current approach: 
+Take the first column, the lower value of RASS score so that if one of the duplicated value is -5 or -4, it was counted.
+
+Should we take another approach? Say, consider nearby RASS score?  CAM-ICU values are not very helpful here.
+```{r, echo = FALSE}
+rass_dup_w %>%
+  count(rass_score.x, rass_score.y) %>%
+  kable(caption = "Duplicated RASS scores") %>% 
+  kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  row_spec(c(2:5,7:11), background = "#F0E442", color = "black") %>%
+  row_spec(c(6, 22, 26), background = "grey", color = "white") %>% 
+  column_spec(1, bold = T)
+```
+
+## Duplicated assessment time in CAM-ICU
+92 pairs of CAM-ICU values were measured at duplicated assessment time points.
+```{r, echo = FALSE}
+cam_icu_dup_w %>% 
+  group_by(cam_value.x, cam_value.y) %>% 
+  count() %>% 
+  kable(caption = "Duplicated CAM-ICU values") %>% 
+  kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left")
+```
+
+CAM-ICU duplication was resolved based on the corresponding RASS score.
+
+* If RASS score was -5 or -4, CAM-ICU was assigned *UA* (unassessible)
+* If RASS score was not -5 or -4, and one of the duplicated CAM-ICU was *Unases*, the other CAM-ICU value (*Postive* or *Negtive*) was taken.
+* If duplicated CAM-ICUs were positive and negative, CAM-ICU was assigned *Unk* (Unknown)
+```{r, echo = FALSE}
+cam_icu_dup_rass %>% 
+  count(cam_value.x, cam_value.y, rass_score, cam_value) %>% 
+   mutate(
+    cam_value = cell_spec(
+      cam_value, "html",
+      color = "white",
+      background  = case_when(
+        cam_value == "Postiv" ~ "#D55E00", 
+        cam_value == "Negtiv" ~ "#56B4E9",
+        cam_value == "Unk" ~ "black",
+        cam_value == "UA" ~ "gray")
+      )
+    ) %>% 
+  kable(format = "html", escape = F, caption = "Reduce Duplicated CAM") %>% 
+  kable_styling(bootstrap_options = c("bordered", "condensed"), 
+                full_width = F,
+                position = "left")
+```
+
+
+### Duplication in both RASS and CAM-ICU
+10 of the assessment time points had both duplicated CAM-ICU values and RASS scores. Based on the reduction rules above, they were reduced as following:
+```{r, echo = FALSE}
+cam_icu_dup_rass %>% 
+  select(grid, dttm, cam_value) %>% 
+  inner_join(cam_rass_dup, by = c("grid", "dttm")) %>% 
+  select(grid, dttm, cam_value.y, cam_value.x, rass_score.x, rass_score.y, cam_value) %>% 
+  arrange(cam_value.y) %>% 
+  mutate(
+    cam_value = cell_spec(
+      cam_value, "html",
+      color = "white",
+      background  = case_when(
+        cam_value == "Postiv" ~ "#D55E00", 
+        cam_value == "Negtiv" ~ "#56B4E9",
+        cam_value == "UA" ~ "black",
+        cam_value == "Unk" ~ "gray")
+      )
+    ) %>% 
+  kable(format = "html", escape = F, caption = "10 time points with both duplicated CAM-ICU and RASS") %>% 
+  kable_styling(bootstrap_options = c("bordered", "condensed"), 
+                full_width = F,
+                position = "left")
+```
+
+# Merge CAM and RASS to get daily status
+RASS data and CAM-ICU data were merged by assessment time.  All the RASS and CAM-ICU assessments were kept.
+
+## Assessment level
+For each assessment, the following rules were applied in order:
+
+* RASS values not in the range [-5, 4] were assigned to *<NA>*
+* If RASS value is -5 or -4, CAM-ICU was assinged to *UA*
+* CAM-ICU values *Delirium present* and *Postive* were assinged to *Positive*
+* CAM-ICU values *No delirium* and *Negativ* were assigned to *Negative*
+* CAM-ICU values *Unases* and *Unk* was assgined to *<NA>*
+
+
+
+```{r, echo = FALSE}
+xtabs( ~ rass_score + cam_value, data = cam_rass, addNA = T) %>% 
+  kable(caption = "CAM-ICU vs RASS before cleaning up") %>% 
+  kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  column_spec(7:9, background = "grey", color = "white") %>%
+   column_spec(c(2,5), background = "#D55E00", color = "white") %>%
+   column_spec(3:4, background = "#56B4E9", color = "white") %>%
+  row_spec(3:4, background = "black", color = "white") %>% 
+  column_spec(1, bold = T)
+xtabs( ~ rass + cam, data = cam_rass, addNA = T) %>% 
+  kable(caption = "CAM-ICU vs RASS after cleaning up") %>% 
+   kable_styling(bootstrap_options = c("bordered", "condensed"), 
+                full_width = F,
+                position = "left") %>% 
+  add_header_above(c("RASS score" = 1, "CAM-ICU value" = length(unique(cam_rass$cam)))) %>% 
+  column_spec(1, bold = T) %>% 
+  column_spec(2, background = "#56B4E9", color = "white") %>% 
+  column_spec(3, background = "#D55E00", color = "white") %>%
+  column_spec(4, background = "black", color = "white") %>%
+  column_spec(5, background = "grey", color = "white") 
+  
+```
+
+## Daily status
+To get daily status, the following rules were applied to each calendar day:
+
+* *Delirious* if any CAM-ICU value was Positive
+* Otherwise *comatose* if any RASS value was -5 or -4
+* Otherwise *Normal* if any CAM-ICU value was Negative
+* Otherwise *Unknown: RASS only* if all CAM-ICU values were missing and at least one non-missing RASS value
+* Otherwise *Unknown: No CAM nor RASS* if all CAM-ICU and RASS values were missing
+
+
+There are total `r comma(nrow(cam_rass_daily))` person-days.
+```{r, echo = FALSE}
+cam_rass_daily %>% 
+  count(status.today) %>% 
+  mutate(pct = percent(nn/nrow(cam_rass_daily))) %>% 
+  kable(caption = "Daily Status") %>% 
+  kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  column_spec(1, bold = T)
+  
+```
+
+
+## Unknown: RASS only category
+For the last category *Unknown: RASS only*, 20,556 person-days were in CAM-ICU file but CAM-ICU value was missing.
+668,793 person-days not in CAM-ICU file. of which 16,324 were in CAM file with some CAM values other than CAM-ICU, the other 652,469 person-days were not found in CAM at all.   This is not surprising given that RASS file has almost twice number of person-days compared to CAM file.
+
+See a few examples
+
+The first example showed a case where for each day there was only one RASS assessment but no CAM-ICU.
+
+The second example showed a case where there were several RASS assessment but no CAM-ICU during a day.
+```{r, echo = FALSE}
+## see a few examples
+cam_rass_daily %>% 
+  filter(grid == "R200000649", dt %within% interval("2011-06-20", "2011-06-26")) %>% 
+  select(grid, dt, status.today) %>% 
+   mutate(
+    status.today = cell_spec(
+      status.today, "html",
+      color = "white",
+      background  = case_when(
+        status.today == "Delirious" ~ "#D55E00", 
+        status.today == "Normal" ~ "#56B4E9",
+        status.today == "Comatose" ~ "black",
+        status.today == "Unknown: RASS only" ~ "gray")
+      )
+    ) %>% 
+   kable(format = "html", escape = F, caption = "Example 1, daily level") %>% 
+  kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") 
+cam_rass %>% 
+  filter(grid == "R200000649", dt %within% interval("2011-06-20", "2011-06-26")) %>% 
+  select(grid,  dttm, cam_value, rass_score, cam) %>% 
+   mutate(
+    cam = cell_spec(
+      cam, "html",
+      color = "white",
+      background  = case_when(
+        cam == "Positive" ~ "#D55E00", 
+        cam == "Negative" ~ "#56B4E9",
+        cam == "UA" ~ "black",
+        is.na(cam) ~ "gray")
+      )
+    ) %>% 
+  kable(format = "html", escape = F, caption = "Example 1, assessment level") %>% 
+  kable_styling(bootstrap_options = c("bordered", "condensed"), 
+                full_width = F,
+                position = "left")
+  
+cam_rass_daily %>% 
+  filter(grid == "R200002089", dt %within% interval("2007-08-25", "2007-08-31")) %>% 
+  select(grid, dt, status.today) %>% 
+    mutate(
+    status.today = cell_spec(
+      status.today, "html",
+      color = "white",
+      background  = case_when(
+        status.today == "Delirious" ~ "#D55E00", 
+        status.today == "Normal" ~ "#56B4E9",
+        status.today == "Comatose" ~ "black",
+        status.today == "Unknown: RASS only" ~ "gray")
+      )
+    ) %>% 
+   kable(format = "html", escape = F, caption = "Example 2, daily level") %>% 
+  kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") 
+cam_rass %>% 
+  filter(grid == "R200002089", dt %within% interval("2007-08-25", "2007-08-31")) %>% 
+  select(grid,  dttm, cam_value, rass_score, cam) %>% 
+  mutate(
+    cam = cell_spec(
+      cam, "html",
+      color = "white",
+      background  = case_when(
+        cam == "Positive" ~ "#D55E00", 
+        cam == "Negative" ~ "#56B4E9",
+        cam == "UA" ~ "black",
+        is.na(cam) ~ "gray")
+      )
+    ) %>% 
+  kable(format = "html", escape = F, caption = "Example 1, assessment level") %>% 
+  kable_styling(bootstrap_options = c("bordered", "condensed"), 
+                full_width = F,
+                position = "left")
+```
+
+
+# Questions to discuss
+
+* Do we want to first make sure all dates are within admission/discharge range? Are RASS assessed outside ICU?
+* Do we want to do something similar to before, assign a CAM-ICU value based on RASS score when CAM-ICU is missing? 
+* Last time, Dr. Tang proposed for days with only negative CAM-ICU, we may also want to impute a CAM-ICU value, which will add more imputation.  Do we want to do this?  I think if CAM-ICU was assessed often enough (on the CAM-ICU sheet I found, it says every 8-12 hours), maybe we can just accept the negative value.
+* Regarding imputation, we will impute at daily level for sure. However, since daily status is a combination of CAM-ICU and RASS value, if we want to use CAM-ICU and RASS at individual assessment to impute, isn't this kind of at assessment level?

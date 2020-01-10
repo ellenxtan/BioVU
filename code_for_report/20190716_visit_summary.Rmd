@@ -1,0 +1,194 @@
+---
+title: "BioVU CAM-ICU visit summary"
+author: "Fei Ding"
+date: "July 16, 2019"
+output:
+  html_document:
+    df_print: paged
+    
+---
+
+## Visit summary
+```{r setup, include = FALSE}
+library(tidyverse)
+library(readxl)
+library(lubridate)
+library(scales)
+library(kableExtra)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+
+cam_rass_daily <- read_csv("../output/daily_status_20190617.csv")
+cam_gap <- read_csv("../output/cam_gap_20190618.csv")
+daily_status_f1 <- sqldf::sqldf('SELECT *
+        FROM cam_rass_daily as t1
+        INNER JOIN cam_gap as t2 
+        ON t1.grid = t2.grid AND dt BETWEEN first_cam AND last_cam') %>% 
+  as_tibble()
+visit_status1 <- daily_status_f1 %>% 
+  filter(status.today %in% c("Comatose", "Delirious", "Normal", "Unkown: conflicting CAM")) %>% 
+  group_by(grid, adm_id) %>% 
+  count(status.today) %>% 
+  ungroup() %>% 
+  spread(key = status.today, value = n, fill = 0L) 
+
+visit_status2 <- visit_status1 %>% 
+  full_join(cam_gap, by = c("grid", "adm_id")) %>% 
+  mutate(any_coma = ifelse(Comatose > 0, 1, 0),
+         any_del = ifelse(Delirious > 0, 1, 0),
+         all_norm = ifelse(Normal == bt_days, 1, 0),
+         norm_un = ifelse(any_coma + any_del + all_norm == 0, 1, 0)
+         )
+coma_q <- visit_status2 %>% 
+  filter(any_coma > 0) %>% 
+  pull(Comatose) %>% 
+  quantile()
+del_q <- visit_status2 %>% 
+  filter(any_del > 0) %>% 
+  pull(Delirious) %>% 
+  quantile()
+```
+
+As stated in the last report, if we ignore CAM-ICUs without a matching admission/discharge record, there are `r comma(nrow(cam_gap))` CAM-ICU visits, and `r paste0(comma(sum(cam_gap$n_hole == 0)), " (", percent(sum(cam_gap$n_hole == 0)/nrow(cam_gap)), ")")` visits had complete CAM-ICU data.  Overall there are `r comma(sum(cam_gap$bt_days))` hospital days that should have CAM-ICU data, i.e., # of day in-between first and last CAM-ICU (including comma) for each visit.  The size of all holes in-between those days are  `r comma(sum(cam_gap$all_hole_size))` days, missing rate is `r percent(sum(cam_gap$all_hole_size)/as.numeric(sum(cam_gap$bt_days)))`.  Note that there are 11 days with conflicting CAM-ICUs assessed at exactly the same time.
+
+```{r}
+
+daily_status_f1 %>% 
+  filter(status.today %in% c("Comatose", "Delirious", "Normal", "Unkown: conflicting CAM")) %>% 
+  count(status.today) %>% 
+  kable(caption = "Daily status in CAM-ICU visits") %>% 
+    kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  column_spec(1, bold = T)
+
+daily_status_f1 %>% 
+    filter(status.today %in% c( "Unkown: conflicting CAM"))
+ 
+```
+
+
+
+Here, we summarize status at visit level.  Note that A visit may have both coma and delirium.
+```{r}
+tibble(
+  `Visit Status` = c("Total # of visits", 
+           "# of visits with coma", "median # of days with coma (IQR)",
+           "# of visits with delirium", "median # of days with delirium (IQR)",
+           "# of visits with all normal", "# of visits with normal + unknown"),
+  n = c(comma(nrow(visit_status2)), 
+             comma(sum(visit_status2$any_coma)), paste0(coma_q[3], " (", coma_q[2], ", ", coma_q[4], ")"),
+             comma(sum(visit_status2$any_del)), paste0(del_q[3], " (", del_q[2], ", ", del_q[4], ")"),
+             comma(sum(visit_status2$all_norm)), comma(sum(visit_status2$norm_un)))
+  ) %>% 
+  kable(caption = "CAM-ICU visit summary") %>% 
+    kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  column_spec(1, bold = T) %>% 
+  add_indent(c(3, 5))
+```
+
+
+## CAM-ICUs without admission/discharge records
+```{r}
+cam_noad <- cam_rass_daily %>% 
+  filter(n != n_cam_na, n != n_cam_ua, n != n_cam_na + n_cam_ua) %>% 
+  anti_join(
+    daily_status_f1, by = c("grid", "dt")
+  ) %>% 
+  arrange(grid, dt) %>% 
+  group_by(grid) %>% 
+  mutate(date_diff = as.numeric(dt - lag(dt))) %>% 
+  ungroup()
+cam_noad$visit_id = NA
+cam_noad$visit_id[1] = 1
+for (i in 2:nrow(cam_noad)) {
+  if (cam_noad$grid[i] != cam_noad$grid[i-1]) {
+    cam_noad$visit_id[i] = 1
+  } else if (cam_noad$grid[i] == cam_noad$grid[i-1] & cam_noad$dt[i] - cam_noad$dt[i-1] == 1) {
+    cam_noad$visit_id[i] = cam_noad$visit_id[i-1]
+  } else if (cam_noad$grid[i] == cam_noad$grid[i-1] & cam_noad$dt[i] - cam_noad$dt[i-1] > 1) {
+    cam_noad$visit_id[i] = cam_noad$visit_id[i-1] + 1
+  }
+}
+cam_noad_visit <- cam_noad %>% 
+  group_by(grid, visit_id) %>% 
+  summarise(first_cam_noad = min(dt),
+            last_cam_noad = max(dt)) %>% 
+  ungroup() 
+
+cam_gap_noad <- sqldf::sqldf('SELECT *
+        FROM cam_noad_visit as t1
+        INNER JOIN cam_gap as t2 
+        where t1.grid = t2.grid AND (first_cam_noad = dc_date + 1 OR last_cam_noad = adm_date - 1)') %>% 
+  as_tibble() 
+```
+
+`r comma(length(unique(cam_noad$grid)))` patients had CAM-ICUs outside admission records. In total, it's `r comma(nrow(cam_noad))` days with CAM-ICU assessments (including coma), and were grouped into `r comma(nrow(cam_noad_visit))` visits.  
+```{r}
+cam_noad %>% 
+  count(status.today)
+```
+
+If the visit's first or last CAM-ICU was right next to an exisiting discharge/admission records, it will be merged with that record.  And there are `r comma(nrow(cam_gap_noad))` such visits.
+```{r}
+cam_gap_noad %>% 
+  select(grid:last_cam_noad, adm_id:last_cam)
+```
+
+Here's one example of CAM-ICU assessmens after recorded d/c date.  There are some gap between two blocks of CAM-ICUs.  Could this patient be out of ICU while in hospital?
+```{r}
+id = "R200860475"
+cam_rass_daily %>% 
+  filter(grid == id) %>% 
+  select(grid, dt, status.today) 
+cam_gap_noad %>% 
+  filter(grid == id) %>% 
+  select(grid:last_cam_noad, adm_id:last_cam)
+```
+
+
+There are also visit's whose first or last CAM-ICU were two days from an exisiting discharge/admission records
+
+```{r}
+id = "R200124788"
+cam_rass_daily %>% 
+  filter(grid == id) %>% 
+  select(grid, dt, status.today)
+cam_gap %>% 
+  filter(grid == id) 
+cam_noad %>% 
+  filter(grid == id)  %>% 
+  select(grid, visit_id, dt, status.today)
+```
+
+
+Due to lack of admission/discharge data, it's hard to know whether one day of missing CAM-ICU is a true hole or it's due to discharge from ICU/hospital.  Do we want to use RASS assessment to help with this?
+```{r}
+id = "R200376762"
+cam_rass_daily %>% 
+  filter(grid == id, year(dt) > 2007) %>% 
+  select(grid, dt, status.today)
+cam_noad %>% 
+  filter(grid == id) %>% 
+  select(grid, visit_id, dt, status.today)
+```
+
+Below is a patient who had two admission records that's apart only by one day.
+```{r}
+id = "R204461198"
+cam_rass_daily %>% 
+  filter(grid == id) %>% 
+  select(grid, dt, status.today) 
+cam_gap %>% 
+  filter(grid == id) 
+cam_noad %>% 
+  filter(grid == id) %>% 
+  select(grid, visit_id, dt, status.today) 
+```
+

@@ -1,0 +1,234 @@
+---
+title: "BioVU CAM-ICU data"
+author: "Fei Ding"
+date: "Feburary 28, 2019"
+output:
+  html_document
+---
+
+ 
+
+```{r setup, include = FALSE}
+options(width = 200)
+library(tidyverse)
+library(Hmisc)
+library(scales)
+library(lubridate)
+library(kableExtra)
+load("../output/data_raw.RData")
+
+static_raw <- as.tibble(static_raw)
+discharge_raw <- as.tibble(discharge_raw)
+cam_raw <- as.tibble(cam_raw)
+rass_raw <- as.tibble(rass_raw)
+cam_icu_daily_ct <- read_csv("../output/cam_icu_daily_summary.csv")
+
+rass_raw <- rass_raw %>% 
+  rename(rass_time = rass_date) %>% 
+  mutate(rass_dttm = mdy_hms(rass_time),
+         rass_date = as_date(rass_dttm)) %>% 
+  arrange(grid, rass_dttm) 
+cam_raw <- cam_raw %>% 
+  distinct() %>% 
+  rename(cam_time = cam_date) %>% 
+  mutate(cam_dttm = mdy_hms(cam_time),
+         cam_date = as_date(cam_dttm)) %>% 
+  arrange(grid, cam_dttm)
+```
+
+## Number of calendar days without any CAM-ICU assessments
+For each CAM-ICU assessment day, total number of CAM-ICU assessments, number of negative, postive, unassessed, and missing CAM-ICU were calculated.   It is an interesting summary to look at.
+The example below shows that the patient had all negative CAM-ICU in the first five days, then had a few days with either positive or unassessed CAM-ICUs, then several days with both positive and negative CAM-ICU, and at last, go back to all negative CAM-ICU.  
+```{r, echo = F}
+cam_icu_daily_ct %>% 
+  filter(grid == "R200002089") %>% 
+  select(-composition) %>% 
+  print(n = 50)
+```
+
+Each calendar day was categorized based on assessment result composition.
+out of the `r nrow(cam_icu_daily_ct)` person-days, `r sum(cam_icu_daily_ct$composition %in% c("All Missing", "All Unassessed", "Missing + Unassessed"))` person-day had all CAM-ICU unassessed or missing
+```{r, echo = F}
+count(cam_icu_daily_ct, composition) %>% 
+  print(n = 10)
+```
+
+For the `r sum(cam_icu_daily_ct$composition %in% c("All Missing", "All Unassessed", "Missing + Unassessed"))` person-days with all CAM-ICU unassessed or missing, we also checked whether there are any CAM measurements other than CAM-ICU on that day.
+22 patient-days have some other CAM measure (mostly no Delirium, on Yes/CAM Total = 6), often paired *CAM Total* and *Delirium Present*, sometimes just one.
+```{r, echo = F}
+cam_icu_daily_ct %>% 
+  filter(composition %in% c("All Missing", "All Unassessed", "Missing + Unassessed")) %>% 
+  left_join(
+    cam_raw, by = c("grid", "cam_date")
+  ) %>% 
+  filter(cam_test_name != "CAM-ICU") %>% 
+  select(grid, cam_date, n, composition, cam_dttm, cam_test_name, cam_value) %>% 
+  print(n = 100)
+```
+
+
+## See a few examples of CAM-RASS conflicts
+CAM-ICU and RASS were merged by assessment time to find CAM-RASS conflicts.
+```{r, include = F}
+cam_icu <- cam_icu <- cam_raw %>% 
+  filter(cam_test_name == "CAM-ICU") %>% 
+  select(-cam_test_name, -cam_time) %>% 
+  mutate(cam_value = ifelse(is.na(cam_value), "Missing", cam_value))
+cam_rass <- cam_icu %>% 
+  full_join(select(rass_raw, -rass_score_test_name, -rass_time), 
+            by = c("grid", "cam_dttm" = "rass_dttm")) %>% 
+  rename(dttm = cam_dttm) %>% 
+  select(grid, dttm, cam_date, cam_value, rass_date, rass_score) %>% 
+  arrange(grid, dttm) %>% 
+  mutate(
+    conflict = case_when(
+      rass_score %in% -3:4 & cam_value %in% c("Unases", "Missing") ~ "Type II",
+      rass_score %in% -5:-4 & cam_value %in% c("Postiv", "Delirium present", "Negtiv", "No delirium") ~ "Type I"
+    )
+  ) 
+```
+
+There are two types of conflicts. Type I conflict: RASS is -5 or -4, but CAM was either positive or negative; Type II conflict: RASS is -3 to 4, and CAM was unassessed.  They are highlighted in grey and yellow respectively in the tables below.  There are way more Type II conflicts  (`r sum(cam_rass$conflict %in% "Type II")`) compared to Type I conflicts (`r sum(cam_rass$conflict %in% "Type I")`).  Type II conflict may be ok, we just need to make sure we call coma based on RASS value, not unassessed CAM. 
+```{r, echo = F}
+cam_rass %>% 
+  filter(rass_score %in% -5:4 | is.na(rass_score)) %>% 
+  with(xtabs( ~ rass_score + cam_value, addNA = T)) %>% 
+  kable(caption = "CAM-ICU vs. RASS, focus on RASS -5 to 4") %>% 
+  kable_styling(bootstrap_options = c("condensed", "bordered"), 
+                full_width = F,
+                position = "left") %>% 
+  add_header_above(c("RASS score" = 1, "CAM-ICU value" = length(unique(cam_rass$cam_value)))) %>% 
+  row_spec(1:2, background = "grey", color = "white") %>% 
+  column_spec(c(3, 7), background = "#F0E442", color = "black")
+ 
+
+conf_list <- cam_rass %>% 
+  filter(grid == "R200002089", 
+         as_date(dttm) %within% interval("2007-08-22", "2007-09-01")  ) %>% 
+  arrange(grid, dttm)
+conf_list %>% 
+   select(grid, dttm, cam_value, rass_score) %>% 
+  mutate(
+    cam_value = cell_spec(
+      cam_value, "html",
+      color = "white",
+      background  = case_when(
+        cam_value %in% c("Postiv", "Delirium present") ~ "#D55E00", 
+        cam_value %in% c("Negtiv", "No delirium") ~ "#56B4E9",
+        T ~ "black")
+      )
+    ) %>% 
+  kable(format = "html", escape = F, caption = "Example 1") %>% 
+  kable_styling(bootstrap_options = c("bordered", "condensed"), 
+                full_width = F,
+                position = "left") %>% 
+  row_spec(with(conf_list, which(conflict %in% "Type I")), background = "grey", color = "white") %>% 
+  row_spec(with(conf_list, which(conflict %in% "Type II")), background = "#F0E442", color = "black")
+
+conf_list <- cam_rass %>% 
+  filter(grid == "R202019861", 
+         as_date(dttm) %within% interval("2012-03-28", "2012-03-31")  ) %>% 
+  arrange(grid, dttm)
+conf_list %>% 
+  select(grid, dttm, cam_value, rass_score) %>% 
+  mutate(
+    cam_value = cell_spec(
+      cam_value, "html",
+      color = "white",
+      background  = case_when(
+        cam_value %in% c("Postiv", "Delirium present") ~ "#D55E00", 
+        cam_value %in% c("Negtiv", "No delirium") ~ "#56B4E9",
+        T ~ "black")
+      )
+    ) %>% 
+  kable(format = "html", escape = F, caption = "Example 2") %>% 
+  kable_styling(bootstrap_options = c("bordered", "condensed"), 
+                full_width = F,
+                position = "left") %>% 
+  row_spec(with(conf_list, which(conflict %in% "Type I")), background = "grey", color = "white") %>% 
+  row_spec(with(conf_list, which(conflict %in% "Type II")), background = "#F0E442", color = "black")
+
+conf_list <- cam_rass %>% 
+  filter(grid == "R201753181", 
+         as_date(dttm) %within% interval("2010-06-27", "2010-06-29")  ) %>% 
+  arrange(grid, dttm)
+conf_list %>% 
+  select(grid, dttm, cam_value, rass_score) %>% 
+  mutate(
+    cam_value = cell_spec(
+      cam_value, "html",
+      color = "white",
+      background  = case_when(
+        cam_value %in% c("Postiv", "Delirium present") ~ "#D55E00", 
+        cam_value %in% c("Negtiv", "No delirium") ~ "#56B4E9",
+        T ~ "black")
+      )
+    ) %>% 
+  kable(format = "html", escape = F, caption = "Example 3") %>% 
+  kable_styling(bootstrap_options = c("bordered", "condensed"), 
+                full_width = F,
+                position = "left") %>% 
+  row_spec(with(conf_list, which(conflict %in% "Type I")), background = "grey", color = "white") %>% 
+  row_spec(with(conf_list, which(conflict %in% "Type II")), background = "#F0E442", color = "black")
+```
+
+Of the `r sum(cam_rass$conflict %in% "Type II")` Type I conflicts, 679 have another CAM test *Unable to assess CAM-ICU* recorded at the same time point. Below is an example.
+```{r, echo = F}
+ex1 <- cam_rass %>% 
+  filter(grid == "R201908155", as_date(dttm) %within% interval("2016-01-02", "2016-01-04")) %>% 
+  select(grid, dttm, cam_value, rass_score) 
+ex2 <- cam_raw %>% 
+  filter(grid == "R201908155", cam_test_name != "CAM-ICU", cam_date %within% interval("2016-01-02", "2016-01-04")) %>% 
+  select(grid, cam_dttm, cam_value)
+ex2 %>% 
+  full_join(ex1, by = c("grid", "cam_dttm" = "dttm")) %>% 
+  rename(`CAM-ICU` = cam_value.y,
+         `Unable to assess CAM-ICU` = cam_value.x) %>% 
+  arrange(grid, cam_dttm) %>% 
+  print(n = 100)
+
+```
+
+### year distribution of CAM-RASS conlict
+```{r, echo = F}
+addmargins(xtabs( ~ year(dttm) + conflict, cam_rass, addNA = T)) %>% 
+  kable(col.names = c("Type I", "Type II", "No conflict", "All")) 
+```
+
+## Duplicated CAM-ICU
+There are 92 pairs of duplicated CAM-ICUs.  Some of the assessments also had the CAM-ICU conflict problem.
+```{r, echo = F}
+cam_icu_dup <- cam_icu %>% 
+  filter(duplicated(select(cam_icu, grid, cam_dttm), fromLast = T)|
+           duplicated(select(cam_icu, grid, cam_dttm))) %>% 
+  arrange(grid, cam_dttm, cam_value)
+
+cam_icu_dup %>% 
+  select(grid, cam_value, cam_dttm) %>% 
+  filter(duplicated(select(cam_icu_dup, grid, cam_dttm), fromLast = T)) %>% 
+  inner_join(
+    cam_icu_dup %>% 
+      select(grid, cam_value, cam_dttm) %>% 
+      filter(duplicated(select(cam_icu_dup, grid, cam_dttm))),
+    by = c("grid", "cam_dttm")
+  ) %>% 
+  group_by(cam_value.x, cam_value.y) %>% 
+  count() %>% 
+  print(n = 10)
+
+cam_icu_dup %>% 
+  select(grid, cam_value, cam_dttm) %>% 
+  filter(duplicated(select(cam_icu_dup, grid, cam_dttm), fromLast = T)) %>% 
+  inner_join(
+    cam_icu_dup %>% 
+      select(grid, cam_value, cam_dttm) %>% 
+      filter(duplicated(select(cam_icu_dup, grid, cam_dttm))),
+    by = c("grid", "cam_dttm")
+  ) %>% 
+  inner_join(filter(cam_rass, !is.na(conflict)), by = c("grid", "cam_dttm" = "dttm")) %>% 
+  arrange(grid, cam_dttm) %>% 
+  select(grid, cam_dttm, cam_value, rass_score, conflict) %>% 
+  print(n = 100)
+
+```
+
