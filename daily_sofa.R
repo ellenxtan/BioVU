@@ -520,23 +520,6 @@ ratio_vent_daily %>%
 # still a lot of missing
 
 
-resp_infection <-  sqldf::sqldf('SELECT * 
-                                FROM infections_w1d as t1
-                                INNER JOIN ratio_vent_daily as t2 
-                                ON t1.grid = t2.grid AND lab_date BETWEEN onset_date-2 AND onset_date+1') %>% 
-  as_tibble() %>% 
-  select(-grid..7) %>% 
-  group_by(grid, adm_id) %>% 
-  filter(is.na(sofa_respiration)) %>% 
-  summarise(sofa_respiration = max(sofa_respiration, na.rm = T)) %>% 
-  ungroup() # %>%  # 3818 encounters had ventaltion but no ratio data.
-#  count(sofa_respiration) 
-resp_infection %>% 
-  Hmisc::describe()
-
-
-
-
 
 #> merge daily SOFA scores together ----------------------------------------------------
 sofa_daily <- bilirubin_daily %>% 
